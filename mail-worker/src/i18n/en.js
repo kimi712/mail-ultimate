@@ -1,5 +1,7 @@
 const en = {
 	IncorrectPwd: 'Incorrect password',
+	hardDeleteConfirmMismatch: 'Confirmation text is incorrect, please type DELETE',
+	hardDeleteAdminBlocked: 'The admin account cannot be permanently deleted by self-service',
 	addAccountDisabled: 'Add Email Address feature is disabled',
 	regDisabled: 'Sign up is disabled',
 	emptyEmail: 'Email cannot be empty',

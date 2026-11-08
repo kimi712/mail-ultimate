@@ -1,5 +1,7 @@
 const zh = {
 	IncorrectPwd: '密码输入错误',
+	hardDeleteConfirmMismatch: '确认文字不正确，请输入 DELETE',
+	hardDeleteAdminBlocked: '管理员账号不能自助彻底删除',
 	addAccountDisabled: '添加邮箱功能已关闭',
 	regDisabled: '注册功能已关闭',
 	emptyEmail: '邮箱不能为空',

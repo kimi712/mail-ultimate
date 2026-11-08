@@ -34,3 +34,8 @@ export function userDelete() {
     return http.delete('/my/delete')
 }
 
+// 自助彻底删除：双重确认（密码 + 输入 DELETE），物理删除全部数据，不可恢复。
+export function hardDeleteMyAccount(password, confirmText) {
+    return http.post('/my/hard-delete', { password, confirmText })
+}
+

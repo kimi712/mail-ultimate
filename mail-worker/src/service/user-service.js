@@ -25,6 +25,7 @@ import oauthService from "./oauth-service";
 import settingService from './setting-service';
 import starService from './star-service';
 import auditLogService from './audit-log-service';
+import r2Service from './r2-service';
 
 // CSV 字段转义：含逗号/双引号/换行时加双引号包裹，内部双引号翻倍。
 function csvEscape(value) {
@@ -131,6 +132,15 @@ const userService = {
 	async physicsDelete(c, params) {
 		let { userIds } = params;
 		userIds = userIds.split(',').map(Number);
+		// 先读出各用户当前壁纸（user 行删后就读不到了），供个人文件清理用。
+		let wallpapers = {};
+		try {
+			const rows = await orm(c).select({ userId: user.userId, wallpaper: user.wallpaper })
+				.from(user).where(inArray(user.userId, userIds)).all();
+			for (const row of rows) wallpapers[row.userId] = row.wallpaper || '';
+		} catch (e) {
+			console.error('物理删除读取壁纸失败:', e.message);
+		}
 		await starService.removeByUserIds(c, userIds);
 		await accountService.physicsDeleteByUserIds(c, userIds);
 		await oauthService.deleteByUserIds(c, userIds);
@@ -146,6 +156,8 @@ const userService = {
 				await orm(c).delete(userPasskey).where(eq(userPasskey.userId, userId)).run();
 				await orm(c).delete(userSecurity).where(eq(userSecurity.userId, userId)).run();
 				await c.env.kv.delete(KvConst.SESSION_META + userId);
+				// 个人文件（自定义壁纸）：最佳努力清理，失败不阻断删号。
+				await this.removeUserFiles(c, userId, wallpapers[userId]);
 			}
 		} catch (e) {
 			console.error('物理删除附加清理失败:', e.message);
@@ -156,6 +168,72 @@ const userService = {
 			targetId: String(params.userIds),
 			detail: { userIds: params.userIds }
 		});
+	},
+
+	// 删除某用户的个人文件：自定义壁纸（wallpapers/{userId}/...）。
+	// R2/KV 按前缀列出全部删除；S3 无 list 接口，只删当前壁纸。最佳努力，
+	// 任一环节失败只记日志，不抛错（删号本身不受影响）。
+	async removeUserFiles(c, userId, wallpaperValue) {
+		const prefix = `wallpapers/${userId}/`;
+		const keys = new Set();
+		if (typeof wallpaperValue === 'string' && wallpaperValue) {
+			const key = wallpaperValue.replace(/^\/oss\//, '');
+			if (key.startsWith(prefix)) keys.add(key);
+		}
+		try {
+			const storageType = await r2Service.storageType(c);
+			if (storageType === 'R2' && c.env.r2?.list) {
+				let cursor;
+				for (let page = 0; page < 5; page++) {
+					const res = await c.env.r2.list({ prefix, cursor });
+					for (const obj of res.objects || []) keys.add(obj.key);
+					if (!res.truncated) break;
+					cursor = res.cursor;
+				}
+			} else if (storageType === 'KV') {
+				let cursor;
+				for (let page = 0; page < 5; page++) {
+					const res = await c.env.kv.list({ prefix, cursor });
+					for (const k of res.keys || []) keys.add(k.name);
+					if (res.list_complete) break;
+					cursor = res.cursor;
+				}
+			}
+		} catch (e) {
+			console.error('列出用户个人文件失败:', e.message);
+		}
+		if (keys.size === 0) return;
+		try {
+			await r2Service.delete(c, [...keys]);
+		} catch (e) {
+			console.error('删除用户个人文件失败:', e.message);
+		}
+	},
+
+	// 自助彻底删除：不看 setting.syncDelete，用户本人决定即物理删除。
+	// 双重确认：密码（有密码的账号必须通过；无密码的 OAuth 账号跳过）+
+	// 确认文字必须为 DELETE。管理员账号拒绝自助彻底删除。
+	async hardDeleteSelf(c, userId, params = {}) {
+		const { password = '', confirmText = '' } = params;
+		const userRow = await this.selectByIdIncludeDel(c, userId);
+		if (!userRow) {
+			throw new BizError(t('authExpired'), 401);
+		}
+		if (c.env.admin && userRow.email
+			&& String(userRow.email).toLowerCase() === String(c.env.admin).toLowerCase()) {
+			throw new BizError(t('hardDeleteAdminBlocked'), 403);
+		}
+		if (confirmText !== 'DELETE') {
+			throw new BizError(t('hardDeleteConfirmMismatch'), 400);
+		}
+		if (userRow.password) {
+			if (!await cryptoUtils.verifyPassword(password, userRow.salt, userRow.password)) {
+				throw new BizError(t('IncorrectPwd'), 400);
+			}
+		}
+		// physicsDelete 内已写 user:physics-delete 审计（只记用户 id，不含内容），不再重复记。
+		await this.physicsDelete(c, { userIds: String(userId) });
+		await c.env.kv.delete(kvConst.AUTH_INFO + userId);
 	},
 
 	async list(c, params) {

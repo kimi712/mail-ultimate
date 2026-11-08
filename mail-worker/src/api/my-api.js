@@ -115,4 +115,11 @@ app.delete('/my/delete', async (c) => {
 	return c.json(result.ok());
 });
 
+// 自助彻底删除：双重确认（密码 + 输入 DELETE），不看 setting.syncDelete，
+// 用户本人决定即物理删除全部数据。见 PHASE7-HARDDELETE.md。
+app.post('/my/hard-delete', async (c) => {
+	await userService.hardDeleteSelf(c, userContext.getUserId(c), await c.req.json().catch(() => ({})));
+	return c.json(result.ok());
+});
+
 

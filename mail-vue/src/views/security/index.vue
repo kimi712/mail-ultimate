@@ -211,7 +211,23 @@
           <div class="row">
             <el-button type="danger" :loading="deleteLoading" @click="deleteMyAccount">{{ $t('securityDeleteAccount') }}</el-button>
           </div>
+          <div class="desc">{{ $t('securityHardDeleteAccountDesc') }}</div>
+          <div class="row">
+            <el-button type="danger" plain :loading="hardDeleteLoading" @click="hardDeleteDialogVisible = true">{{ $t('securityHardDeleteAccount') }}</el-button>
+          </div>
         </div>
+
+        <!-- 彻底删除确认框：密码 + 输入 DELETE，双重确认 -->
+        <el-dialog v-model="hardDeleteDialogVisible" :title="$t('securityHardDeleteTitle')" width="480px" :close-on-click-modal="false">
+          <div class="desc" style="margin-bottom: 12px">{{ $t('securityHardDeleteWarning') }}</div>
+          <el-input v-model="hardDeletePassword" type="password" :placeholder="$t('securityHardDeletePassword')" autocomplete="off" show-password />
+          <div class="desc" style="margin: 8px 0 12px">{{ $t('securityHardDeletePasswordHint') }}</div>
+          <el-input v-model="hardDeleteConfirmText" :placeholder="$t('securityHardDeleteConfirmHint')" autocomplete="off" />
+          <template #footer>
+            <el-button @click="hardDeleteDialogVisible = false">{{ $t('cancel') }}</el-button>
+            <el-button type="danger" :disabled="hardDeleteConfirmText !== 'DELETE'" :loading="hardDeleteLoading" @click="confirmHardDelete">{{ $t('securityHardDeleteButton') }}</el-button>
+          </template>
+        </el-dialog>
 
       </div>
     </el-scrollbar>
@@ -221,7 +237,7 @@
 import {ref, reactive, computed, defineOptions, onMounted} from 'vue'
 import {useI18n} from 'vue-i18n'
 import {useRouter} from 'vue-router'
-import {userDelete} from '@/request/my.js'
+import {userDelete, hardDeleteMyAccount} from '@/request/my.js'
 import {
   getSecurity, setSecurity,
   totpSetup, totpEnable, totpDisable,
@@ -276,6 +292,10 @@ const e2eeUnlocked = ref(false)
 const e2eeLoading = ref(false)
 const exportLoading = ref(false)
 const deleteLoading = ref(false)
+const hardDeleteDialogVisible = ref(false)
+const hardDeletePassword = ref('')
+const hardDeleteConfirmText = ref('')
+const hardDeleteLoading = ref(false)
 
 // 安全评分：TOTP +30、Passkey +30、登录提醒 +20、30 天内无异地登录 +20，满分 100。
 const noNewIp30d = computed(() => {
@@ -579,6 +599,26 @@ function deleteMyAccount() {
     })
   }).catch(() => {
   })
+}
+
+// 彻底删除：密码 + 输入 DELETE 双重确认；成功后清 token 回登录页。
+async function confirmHardDelete() {
+  if (hardDeleteConfirmText.value !== 'DELETE') {
+    toast(t('securityHardDeleteWrongText'))
+    return
+  }
+  hardDeleteLoading.value = true
+  try {
+    await hardDeleteMyAccount(hardDeletePassword.value, hardDeleteConfirmText.value)
+    localStorage.removeItem('token')
+    hardDeleteDialogVisible.value = false
+    hardDeletePassword.value = ''
+    hardDeleteConfirmText.value = ''
+    router.replace('/login')
+  } catch (e) {
+    hardDeleteLoading.value = false
+    toast(e?.message || t('reqFailErrorMsg'))
+  }
 }
 
 // ---- E2EE ----

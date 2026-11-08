@@ -547,3 +547,4 @@ TG 推送默认不推正文。
    SMTP 真实联调；邀请码 SNOWDEN 由用户在后台直接建，注册模式由用户改成凭码注册。
 8. 本阶段 65 个文件改动未提交（`git status` 约 65 项，含 15 张壁纸与清单），
    部署前由用户安排提交/推送（仓库 https://github.com/kimi712/mail-ultimate）。
+9. 自助彻底删除已完成（PHASE7-HARDDELETE.md）：安全中心加“彻底删除我的账号与数据”入口（密码 + 输入 DELETE 双重确认），不看 syncDelete、直接物理删除；测试 161 个全过；随下次部署上线。
