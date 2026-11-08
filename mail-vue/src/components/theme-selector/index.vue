@@ -15,9 +15,9 @@
         <input
           type="radio"
           :name="groupName"
-          :value="option.dark"
-          :checked="uiStore.dark === option.dark"
-          @change="selectTheme(option.dark, $event)"
+          :value="option.mode"
+          :checked="themeMode === option.mode"
+          @change="selectTheme(option.mode, $event)"
         >
       </span>
     </label>
@@ -25,21 +25,33 @@
 </template>
 
 <script setup>
-import {useId} from 'vue'
+import {ref, useId} from 'vue'
 import {useI18n} from 'vue-i18n'
 import {useUiStore} from '@/store/ui.js'
+import { loadPrefs, savePrefs, resolveDark, syncSystemThemeListener } from '@/utils/preferences.js'
 
 const {t} = useI18n()
 const uiStore = useUiStore()
 const groupName = useId()
+// Phase 2 A 路补充：主题三档——浅色 / 深色 / 跟随系统。模式存 localStorage mail-prefs.theme，
+// 解析后的 dark 值仍走既有 uiStore.dark（pinia 持久化）与根元素 dark 类。
+const themeMode = ref(loadPrefs().theme)
 const themeOptions = [
-  {label: 'lightTheme', dark: false},
-  {label: 'darkTheme', dark: true},
+  {label: 'lightTheme', mode: 'light', dark: false},
+  {label: 'darkTheme', mode: 'dark', dark: true},
+  {label: 'systemTheme', mode: 'system', dark: null},
 ]
 
-function selectTheme(dark, event) {
+function selectTheme(mode, event) {
+  if (mode === themeMode.value) return
   const bounds = event.currentTarget.closest('.theme-card')?.getBoundingClientRect()
-  changeDark(dark, {
+  const prefs = loadPrefs()
+  prefs.theme = mode
+  savePrefs(prefs)
+  themeMode.value = mode
+  // 跟随系统时注册系统主题监听；切回手动档时取消监听
+  syncSystemThemeListener(mode, uiStore)
+  changeDark(resolveDark(mode), {
     x: bounds ? bounds.left + bounds.width / 2 : window.innerWidth / 2,
     y: bounds ? bounds.top + bounds.height / 2 : window.innerHeight / 2,
   })
@@ -80,10 +92,10 @@ function changeDark(nextIsDark, origin) {
 <style scoped lang="scss">
 .theme-options {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 180px));
+  grid-template-columns: repeat(3, minmax(0, 180px));
   gap: 16px;
   width: 100%;
-  max-width: 376px;
+  max-width: 564px;
 }
 
 .theme-card {

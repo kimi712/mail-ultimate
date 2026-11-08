@@ -33,8 +33,235 @@ const dbInit = {
 		await this.v3_2DB(c);
 		await this.v3_3DB(c);
 		await this.v3_4DB(c);
+		await this.v3_5DB(c);
+		await this.v3_6DB(c);
+		await this.v3_7DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
+	},
+
+	async v3_5DB(c) {
+		// Phase 1 C 路：新表 register_log / audit_log / ip_blocklist + 索引
+		// + setting 新列（契约 §1）+ perm 种子行 37–42（契约 §4）。
+		// 每组语句独立 try/catch + console.warn，沿用现有迁移风格。
+		// 注意：部署后必须核对 pragma_table_info，不要静默以为成功。
+		try {
+			await c.env.db.batch([
+				c.env.db.prepare(`CREATE TABLE IF NOT EXISTS register_log (
+					log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+					ip TEXT NOT NULL DEFAULT '',
+					ip_segment TEXT NOT NULL DEFAULT '',
+					email TEXT NOT NULL DEFAULT '',
+					reg_key_code TEXT NOT NULL DEFAULT '',
+					result INTEGER NOT NULL DEFAULT 0,
+					fail_reason TEXT NOT NULL DEFAULT '',
+					verify_mode INTEGER NOT NULL DEFAULT 0,
+					ua TEXT NOT NULL DEFAULT '',
+					create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+				)`),
+				c.env.db.prepare(`CREATE TABLE IF NOT EXISTS audit_log (
+					log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+					actor_user_id INTEGER NOT NULL DEFAULT 0,
+					action TEXT NOT NULL DEFAULT '',
+					target_type TEXT NOT NULL DEFAULT '',
+					target_id TEXT NOT NULL DEFAULT '',
+					ip TEXT NOT NULL DEFAULT '',
+					ua TEXT NOT NULL DEFAULT '',
+					detail TEXT NOT NULL DEFAULT '',
+					create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+				)`),
+				c.env.db.prepare(`CREATE TABLE IF NOT EXISTS ip_blocklist (
+					block_id INTEGER PRIMARY KEY AUTOINCREMENT,
+					ip TEXT NOT NULL DEFAULT '',
+					ip_segment TEXT NOT NULL DEFAULT '',
+					scope INTEGER NOT NULL DEFAULT 0,
+					reason TEXT NOT NULL DEFAULT '',
+					expire_time DATETIME,
+					created_by TEXT NOT NULL DEFAULT '',
+					create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+				)`)
+			]);
+		} catch (e) {
+			console.warn(`跳过建表：${e.message}`);
+		}
+
+		try {
+			await c.env.db.batch([
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_register_log_segment_time ON register_log(ip_segment, create_time)`),
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_register_log_create_time ON register_log(create_time)`),
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_register_log_ip_time ON register_log(ip, create_time)`),
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_audit_log_create_time ON audit_log(create_time)`),
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_audit_log_actor_time ON audit_log(actor_user_id, create_time)`),
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_ip_blocklist_ip ON ip_blocklist(ip)`),
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_ip_blocklist_segment ON ip_blocklist(ip_segment)`),
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_user_create_ip ON user(create_ip)`),
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_verify_record_ip_type ON verify_record(ip, type)`)
+			]);
+		} catch (e) {
+			console.warn(`跳过索引：${e.message}`);
+		}
+
+		// setting 新列（契约 §1）：D1 侧；entity/setting.js 的 ORM 列由 B 路文件归属，见汇报。
+		const SETTING_COLUMN_SQL_LIST = [
+			`ALTER TABLE setting ADD COLUMN ip_reg_limit INTEGER NOT NULL DEFAULT 3;`,
+			`ALTER TABLE setting ADD COLUMN ip_reg_window_hours INTEGER NOT NULL DEFAULT 24;`,
+			`ALTER TABLE setting ADD COLUMN reg_rate_limit_per_min INTEGER NOT NULL DEFAULT 5;`,
+			`ALTER TABLE setting ADD COLUMN reg_circuit_threshold INTEGER NOT NULL DEFAULT 20;`,
+			`ALTER TABLE setting ADD COLUMN reg_circuit_open INTEGER NOT NULL DEFAULT 0;`,
+			`ALTER TABLE setting ADD COLUMN resend_day_budget INTEGER NOT NULL DEFAULT 100;`,
+			`ALTER TABLE setting ADD COLUMN resend_month_budget INTEGER NOT NULL DEFAULT 3000;`
+		];
+		for (const sql of SETTING_COLUMN_SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		}
+
+		// perm 种子行 37–42（契约 §4）：逐行 INSERT...SELECT...WHERE NOT EXISTS，幂等。
+		const PERM_SEED_SQL_LIST = [
+			`INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) SELECT 37, 'IP黑名单', NULL, 0, 1, 5.2 WHERE NOT EXISTS (SELECT 1 FROM perm WHERE perm_id = 37)`,
+			`INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) SELECT 38, '黑名单查看', 'ip-block:query', 37, 2, 0 WHERE NOT EXISTS (SELECT 1 FROM perm WHERE perm_id = 38)`,
+			`INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) SELECT 39, '黑名单管理', 'ip-block:set', 37, 2, 1 WHERE NOT EXISTS (SELECT 1 FROM perm WHERE perm_id = 39)`,
+			`INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) SELECT 40, '风控日志', NULL, 0, 1, 5.3 WHERE NOT EXISTS (SELECT 1 FROM perm WHERE perm_id = 40)`,
+			`INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) SELECT 41, '注册日志查看', 'register-log:query', 40, 2, 0 WHERE NOT EXISTS (SELECT 1 FROM perm WHERE perm_id = 41)`,
+			`INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) SELECT 42, '审计日志查看', 'audit-log:query', 40, 2, 1 WHERE NOT EXISTS (SELECT 1 FROM perm WHERE perm_id = 42)`
+		];
+		for (const sql of PERM_SEED_SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过数据：${e.message}`);
+			}
+		}
+	},
+
+	async v3_6DB(c) {
+		// Phase 2–4 总协调：新表 login_log / alert_log + 索引
+		// + setting 新列 reg_key_alert_threshold + perm 种子行 43–45（契约 §1）。
+		// 每组语句独立 try/catch + console.warn，沿用现有迁移风格。
+		// 注意：部署后必须核对 pragma_table_info，不要静默以为成功。
+		try {
+			await c.env.db.batch([
+				c.env.db.prepare(`CREATE TABLE IF NOT EXISTS login_log (
+					log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+					user_id INTEGER NOT NULL DEFAULT 0,
+					email TEXT NOT NULL DEFAULT '',
+					ip TEXT NOT NULL DEFAULT '',
+					ua TEXT NOT NULL DEFAULT '',
+					is_new_ip INTEGER NOT NULL DEFAULT 0,
+					create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+				)`),
+				c.env.db.prepare(`CREATE TABLE IF NOT EXISTS alert_log (
+					log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+					type TEXT NOT NULL DEFAULT 'system',
+					text TEXT NOT NULL DEFAULT '',
+					source TEXT NOT NULL DEFAULT 'worker',
+					create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+				)`)
+			]);
+		} catch (e) {
+			console.warn(`跳过建表：${e.message}`);
+		}
+
+		try {
+			await c.env.db.batch([
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_login_log_user_time ON login_log(user_id, create_time)`),
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_login_log_create_time ON login_log(create_time)`),
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_alert_log_create_time ON alert_log(create_time)`),
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_alert_log_type_time ON alert_log(type, create_time)`)
+			]);
+		} catch (e) {
+			console.warn(`跳过索引：${e.message}`);
+		}
+
+		// setting 新列：注册密钥库存告警阈值（总量低于此值告警，默认 500）。
+		try {
+			await c.env.db.prepare(`ALTER TABLE setting ADD COLUMN reg_key_alert_threshold INTEGER NOT NULL DEFAULT 500;`).run();
+		} catch (e) {
+			console.warn(`跳过字段：${e.message}`);
+		}
+
+		// user 新列：用户语言偏好（Phase 2–4 第四阶段；空 = 跟随浏览器/默认中文）。
+		try {
+			await c.env.db.prepare(`ALTER TABLE user ADD COLUMN locale TEXT NOT NULL DEFAULT '';`).run();
+		} catch (e) {
+			console.warn(`跳过字段：${e.message}`);
+		}
+
+		// perm 种子行 43–45（契约 §1）：逐行 INSERT...SELECT...WHERE NOT EXISTS，幂等。
+		const PERM_SEED_SQL_LIST_36 = [
+			`INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) SELECT 43, '告警中心', NULL, 0, 1, 5.4 WHERE NOT EXISTS (SELECT 1 FROM perm WHERE perm_id = 43)`,
+			`INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) SELECT 44, '告警查看', 'alert:query', 43, 2, 0 WHERE NOT EXISTS (SELECT 1 FROM perm WHERE perm_id = 44)`,
+			`INSERT INTO perm (perm_id, name, perm_key, pid, type, sort) SELECT 45, '用户导出', 'user:export', 6, 2, 8 WHERE NOT EXISTS (SELECT 1 FROM perm WHERE perm_id = 45)`
+		];
+		for (const sql of PERM_SEED_SQL_LIST_36) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过数据：${e.message}`);
+			}
+		}
+	},
+
+	async v3_7DB(c) {
+		// Phase 6：新表 user_totp / user_passkey / user_security + 索引
+		// + setting 新列 log_retention_days / log_ip_mask + email 新列 e2ee（契约 §1.1）。
+		// 每组语句独立 try/catch + console.warn，沿用 v3_5DB/v3_6DB 风格；
+		// 不改任何现有列定义；部署后须核对 pragma_table_info。
+		try {
+			await c.env.db.batch([
+				c.env.db.prepare(`CREATE TABLE IF NOT EXISTS user_totp (
+					user_id INTEGER PRIMARY KEY,
+					secret_encrypted TEXT NOT NULL DEFAULT '',
+					enabled INTEGER NOT NULL DEFAULT 0,
+					backup_codes_hash TEXT NOT NULL DEFAULT '[]',
+					created_time DATETIME DEFAULT CURRENT_TIMESTAMP
+				)`),
+				c.env.db.prepare(`CREATE TABLE IF NOT EXISTS user_passkey (
+					credential_id TEXT PRIMARY KEY,
+					user_id INTEGER NOT NULL DEFAULT 0,
+					public_key_jwk TEXT NOT NULL DEFAULT '',
+					counter INTEGER NOT NULL DEFAULT 0,
+					transports TEXT NOT NULL DEFAULT '[]',
+					name TEXT NOT NULL DEFAULT '',
+					created_time DATETIME DEFAULT CURRENT_TIMESTAMP
+				)`),
+				c.env.db.prepare(`CREATE TABLE IF NOT EXISTS user_security (
+					user_id INTEGER PRIMARY KEY,
+					login_alert INTEGER NOT NULL DEFAULT 1,
+					e2ee_enabled INTEGER NOT NULL DEFAULT 0,
+					retention_days INTEGER NOT NULL DEFAULT 0,
+					e2ee_salt TEXT NOT NULL DEFAULT '',
+					created_time DATETIME DEFAULT CURRENT_TIMESTAMP
+				)`)
+			]);
+		} catch (e) {
+			console.warn(`跳过建表：${e.message}`);
+		}
+
+		try {
+			await c.env.db.batch([
+				c.env.db.prepare(`CREATE INDEX IF NOT EXISTS idx_user_passkey_user ON user_passkey(user_id)`)
+			]);
+		} catch (e) {
+			console.warn(`跳过索引：${e.message}`);
+		}
+
+		// setting 新列 + email 新列：逐条 ALTER，列已存在时抛错只记 warn（幂等）。
+		const COLUMN_SQL_LIST = [
+			`ALTER TABLE setting ADD COLUMN log_retention_days INTEGER NOT NULL DEFAULT 90;`,
+			`ALTER TABLE setting ADD COLUMN log_ip_mask INTEGER NOT NULL DEFAULT 0;`,
+			`ALTER TABLE email ADD COLUMN e2ee INTEGER NOT NULL DEFAULT 0;`
+		];
+		for (const sql of COLUMN_SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		}
 	},
 
 	async v3_4DB(c) {
@@ -696,7 +923,7 @@ const dbInit = {
 			  INSERT INTO setting (
 				register, receive, add_email, many_email, title, auto_refresh, register_verify, add_email_verify
 			  )
-			  SELECT 0, 0, 0, 0, 'Cloud Mail', 0, 1, 1
+			  SELECT 0, 0, 0, 0, 'Cloud Mail', 0, 0, 1
 			  WHERE NOT EXISTS (SELECT 1 FROM setting)
 			`).run();
 		} catch (e) {

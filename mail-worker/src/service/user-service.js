@@ -20,6 +20,16 @@ import {oauth} from "../entity/oauth";
 import oauthService from "./oauth-service";
 import settingService from './setting-service';
 import starService from './star-service';
+import auditLogService from './audit-log-service';
+
+// CSV 字段转义：含逗号/双引号/换行时加双引号包裹，内部双引号翻倍。
+function csvEscape(value) {
+	const text = String(value);
+	if (/[",\r\n]/.test(text)) {
+		return '"' + text.replace(/"/g, '""') + '"';
+	}
+	return text;
+}
 
 const userService = {
 
@@ -99,12 +109,19 @@ const userService = {
 	async delete(c, userId) {
 		const { syncDelete } = await settingService.query(c);
 		if (syncDelete === settingConst.syncDelete.OPEN) {
+			// physicsDelete 内已写 user:physics-delete 审计，不再重复记 user:delete。
 			await this.physicsDelete(c, { userIds: String(userId) });
 			await c.env.kv.delete(kvConst.AUTH_INFO + userId)
 			return;
 		}
 		await orm(c).update(user).set({ isDel: isDel.DELETE }).where(eq(user.userId, userId)).run();
 		await c.env.kv.delete(kvConst.AUTH_INFO + userId)
+		await auditLogService.record(c, {
+			action: 'user:delete',
+			targetType: 'user',
+			targetId: userId,
+			detail: { isDel: isDel.DELETE }
+		});
 	},
 
 	async physicsDelete(c, params) {
@@ -114,11 +131,17 @@ const userService = {
 		await accountService.physicsDeleteByUserIds(c, userIds);
 		await oauthService.deleteByUserIds(c, userIds);
 		await orm(c).delete(user).where(inArray(user.userId, userIds)).run();
+		await auditLogService.record(c, {
+			action: 'user:physics-delete',
+			targetType: 'user',
+			targetId: String(params.userIds),
+			detail: { userIds: params.userIds }
+		});
 	},
 
 	async list(c, params) {
 
-		let { num, size, email, timeSort, status } = params;
+		let { num, size, email, timeSort, status, createIp, createIpPrefix } = params;
 
 		size = Number(size);
 		num = Number(num);
@@ -149,6 +172,14 @@ const userService = {
 
 		if (email) {
 			conditions.push(sql`${user.email} COLLATE NOCASE LIKE ${email + '%'}`);
+		}
+
+		// Phase 2 C 路：按注册 IP 筛选。createIp 精确匹配优先于 createIpPrefix
+		// 前缀匹配，二者只取其一；前缀写法复用 email 的 COLLATE NOCASE LIKE。
+		if (createIp) {
+			conditions.push(eq(user.createIp, createIp));
+		} else if (createIpPrefix) {
+			conditions.push(sql`${user.createIp} COLLATE NOCASE LIKE ${createIpPrefix + '%'}`);
 		}
 
 
@@ -238,6 +269,50 @@ const userService = {
 		return { list, total };
 	},
 
+	// Phase 2 C 路：按注册 IP 聚合（风控：同一 IP 注册多个账号）。
+	// 只统计未删除且 create_ip 非空的用户；min 为最少注册数，默认 2。
+	async groupByIp(c, { min = 2 } = {}) {
+		min = Number(min);
+		if (isNaN(min) || min < 1) {
+			min = 2;
+		}
+		const { results } = await c.env.db.prepare(
+			`SELECT create_ip, COUNT(*) AS total FROM user WHERE is_del = 0 AND create_ip != '' GROUP BY create_ip HAVING total >= ? ORDER BY total DESC LIMIT 100`
+		).bind(min).all();
+		return results;
+	},
+
+	// Phase 2 C 路：导出用户 CSV（列固定：userId, email, createIp, activeIp,
+	// status, type, createTime）。复用 list() 的筛选参数，分页循环拉全量；
+	// 总行数超过 5000 时拒绝并提示缩小筛选，避免一次性导出拖垮 D1。
+	async exportCsv(c, params) {
+		const first = await this.list(c, { ...params, num: 1, size: 50 });
+		if (first.total > 5000) {
+			throw new BizError(t('exportTooManyRows'), 400);
+		}
+		const rows = [...first.list];
+		const pages = Math.ceil(first.total / 50);
+		for (let num = 2; num <= pages; num++) {
+			const page = await this.list(c, { ...params, num, size: 50 });
+			rows.push(...page.list);
+		}
+		const header = ['userId', 'email', 'createIp', 'activeIp', 'status', 'type', 'createTime'];
+		const lines = [header.join(',')];
+		for (const row of rows) {
+			const values = [
+				row.userId ?? '',
+				row.email ?? '',
+				row.createIp ?? '',
+				row.activeIp ?? '',
+				row.status ?? '',
+				row.type ?? '',
+				row.createTime ?? ''
+			];
+			lines.push(values.map(csvEscape).join(','));
+		}
+		return lines.join('\r\n');
+	},
+
 	async updateUserInfo(c, userId, recordCreateIp = false) {
 
 
@@ -285,6 +360,12 @@ const userService = {
 		if (status === userConst.status.BAN) {
 			await c.env.kv.delete(KvConst.AUTH_INFO + userId);
 		}
+		await auditLogService.record(c, {
+			action: 'user:set-status',
+			targetType: 'user',
+			targetId: userId,
+			detail: { status }
+		});
 	},
 
 	async setType(c, params) {
@@ -393,6 +474,12 @@ const userService = {
 			await accountService.restoreByUserId(c, userId);
 		}
 
+		await auditLogService.record(c, {
+			action: 'user:restore',
+			targetType: 'user',
+			targetId: userId,
+			detail: { type: type || 0 }
+		});
 	},
 
 	listByRegKeyId(c, regKeyId) {

@@ -118,5 +118,61 @@ const routers = {
             name: 'analysis',
             menu: true
         }
+    }],
+    // Phase 2 C 路：风控后台路由（title 先写英文 key 占位，i18n 由总协调集成时补，见契约 §5）
+    'ip-block:query': [{
+        path: '/ip-blocklist',
+        name: 'ip-blocklist',
+        component: () => import('@/views/ip-blocklist/index.vue'),
+        meta: {
+            title: 'ipBlocklist',
+            name: 'ip-blocklist',
+            menu: true
+        }
+    }],
+    'alert:query': [{
+        path: '/alert-center',
+        name: 'alert-center',
+        component: () => import('@/views/alert-center/index.vue'),
+        meta: {
+            title: 'alertCenter',
+            name: 'alert-center',
+            menu: true
+        }
+    }],
+    'register-log:query': [{
+        path: '/register-log',
+        name: 'register-log',
+        component: () => import('@/views/register-log/index.vue'),
+        meta: {
+            title: 'registerLog',
+            name: 'register-log',
+            menu: true
+        }
+    }],
+    'audit-log:query': [{
+        path: '/audit-log',
+        name: 'audit-log',
+        component: () => import('@/views/audit-log/index.vue'),
+        meta: {
+            title: 'auditLog',
+            name: 'audit-log',
+            menu: true
+        }
+    }],
+    // 第六阶段 C 路：安全中心（用户页，任意登录用户可见）。
+    // 挂在 'my:delete' 下：默认普通用户角色持有该 perm（init.js role_perm 种子 106，
+    // 父级为“个人设置”perm 4），管理员为 '*'；后端 /my/* 接口本身只鉴权不鉴 perm，
+    // 与 /my/loginLog、/my/locale（第二阶段 A 路）一致。若后续 B 路/总协调新增专用 perm，
+    // 只需改此处 key 一处。
+    'my:delete': [{
+        path: '/security',
+        name: 'security',
+        component: () => import('@/views/security/index.vue'),
+        meta: {
+            title: 'securityCenter',
+            name: 'security',
+            menu: true
+        }
     }]
 }

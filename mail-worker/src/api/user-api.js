@@ -29,6 +29,27 @@ app.get('/user/list', async (c) => {
 	return c.json(result.ok(data));
 });
 
+// Phase 2 C 路：导出用户 CSV（权限 user:export，见 security.js）。
+// BOM 由响应体首字符提供，供 Excel 识别中文；文件名带日期。
+app.get('/user/export', async (c) => {
+	const csv = await userService.exportCsv(c, c.req.query());
+	const date = new Date().toISOString().slice(0, 10);
+	return new Response('\uFEFF' + csv, {
+		status: 200,
+		headers: {
+			'Content-Type': 'text/csv; charset=utf-8',
+			'Content-Disposition': `attachment; filename="users-${date}.csv"`
+		}
+	});
+});
+
+// Phase 2 C 路：按注册 IP 聚合（权限 user:query，见 security.js）。
+app.get('/user/groupByIp', async (c) => {
+	const { min } = c.req.query();
+	const data = await userService.groupByIp(c, { min });
+	return c.json(result.ok(data));
+});
+
 app.post('/user/add', async (c) => {
 	await userService.add(c, await c.req.json());
 	return c.json(result.ok());

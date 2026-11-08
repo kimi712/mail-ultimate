@@ -1,4 +1,5 @@
 <template>
+  <el-alert v-if="sendRemain !== null" :title="t('todaySendRemain', {count: sendRemain})" type="info" show-icon :closable="false" class="send-remain" />
   <emailScroll ref="sendScroll"
                :cancel-success="cancelStar"
                :star-success="addStar"
@@ -15,23 +16,46 @@
   </emailScroll>
 </template>
 
+<script>
+// 发信失败人话映射已移到 @/utils/send-error.js（总协调集成）。
+// 实际提示在 layout/write/index.vue 的 sendEmail().catch() 里弹，
+// 那里直接 import { friendlySendError } from '@/utils/send-error.js'。
+// 此处保留重导出，兼容已有引用。
+export { sendErrorMap, friendlySendError } from '@/utils/send-error.js'
+</script>
+
 <script setup>
 import {useAccountStore} from "@/store/account.js";
 import {useEmailStore} from "@/store/email.js";
 import {useSendStore} from "@/store/send.js";
+import {useUserStore} from "@/store/user.js";
+import {useI18n} from "vue-i18n";
 import emailScroll from "@/components/email-scroll/index.vue"
 import {emailList, emailDelete} from "@/request/email.js";
 import {starAdd, starCancel} from "@/request/star.js";
-import {defineOptions, onMounted, ref, watch} from "vue";
+import {defineOptions, onMounted, ref, watch, computed} from "vue";
 import router from "@/router/index.js";
 
 defineOptions({
   name: 'send'
 })
 
+const {t} = useI18n();
 const emailStore = useEmailStore();
 const sendStore = useSendStore();
 const accountStore = useAccountStore();
+const userStore = useUserStore();
+
+// Phase 2 A 路：发件页显示“今日还剩 X 封”。
+// 数据来自 store/user.js 的 loginUserInfo()（user.sendCount 与角色 role.sendCount）；
+// role.sendCount 为空（不限量/无权限/被禁发）时不显示。
+const sendRemain = computed(() => {
+  const role = userStore.user?.role
+  if (!role?.sendCount) {
+    return null
+  }
+  return Math.max(0, role.sendCount - (userStore.user?.sendCount || 0))
+})
 const sendScroll = ref({})
 onMounted(() => {
   emailStore.sendScroll = sendScroll;
@@ -82,5 +106,9 @@ function getEmailList(emailId, size) {
 <style scoped>
 .icon {
   cursor: pointer;
+}
+
+.send-remain {
+  margin-bottom: 10px;
 }
 </style>

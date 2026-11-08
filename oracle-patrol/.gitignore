@@ -1,0 +1,5 @@
+# 真实配置与运行态，绝不提交
+config.json
+state.json
+*.env
+node_modules/

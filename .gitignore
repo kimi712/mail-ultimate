@@ -26,3 +26,6 @@ mail-vue/dist
 .wrangler
 .venv
 git-tools.js
+# 终极版部署配置（真实值，绝不提交）
+.deploy.env
+mail-worker/wrangler.deploy.toml

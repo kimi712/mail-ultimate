@@ -10,8 +10,11 @@
           <span class="sender-name">{{ form.name }}</span>
           <span class="send-email"><{{ form.sendEmail }}></span>
         </div>
-        <div @click="close" style="cursor: pointer;">
-          <Icon icon="material-symbols-light:close-rounded" width="22" height="22"/>
+        <div style="display: flex; align-items: center; gap: 8px;">
+          <el-tag v-if="e2eeEnabled" :type="e2eeUnlocked ? 'success' : 'warning'" size="small">{{ $t('e2eeBadge') }}</el-tag>
+          <div @click="close" style="cursor: pointer; display: flex;">
+            <Icon icon="material-symbols-light:close-rounded" width="22" height="22"/>
+          </div>
         </div>
       </div>
       <div class="container">
@@ -122,6 +125,9 @@ import {useWriterStore} from "@/store/writer.js";
 import db from "@/db/db.js";
 import dayjs from "dayjs";
 import {useI18n} from "vue-i18n";
+import {friendlySendError} from "@/utils/send-error.js";
+import {getSecurity} from "@/request/security.js";
+import {hasMemoryKey, getMemoryKey, unlockWithPassword, encryptEmailParts, isInternalEmail} from "@/utils/e2ee.js";
 import router from "@/router/index.js";
 import {ElMessageBox} from "element-plus";
 
@@ -171,6 +177,20 @@ const form = reactive({
 })
 
 const selectRecipientList = ref([])
+
+// 第六阶段 C 路：端到端加密状态（打开写信框时 best-effort 拉取；后端未落地时按未开启处理）。
+const e2eeEnabled = ref(false)
+const e2eeSalt = ref('')
+const e2eeUnlocked = ref(false)
+function loadE2eeStatus() {
+  getSecurity().then((data) => {
+    e2eeEnabled.value = !!data?.e2eeEnabled
+    e2eeSalt.value = data?.e2eeSalt || ''
+    e2eeUnlocked.value = hasMemoryKey() && e2eeEnabled.value
+  }).catch(() => {
+    e2eeEnabled.value = false
+  })
+}
 
 const contacts = computed(() => writerStore.sendRecipientRecord.map(item => ({email: item})))
 const separateSendLabel = computed(() => t(form.sendType === 'forward' ? 'separateForward' : 'separateSend'))
@@ -350,6 +370,55 @@ async function sendEmail() {
     return
   }
 
+  // 第六阶段 C 路：E2EE 开启时加密 text/content 后发信并传 e2ee: 1；只加密副本 payload，
+  // 不改 form（避免密文留在编辑器/草稿里）。附件本阶段不加密。
+  // 注意：本块必须在进度提示创建之前——提前 return 时提示尚未创建，不会卡住。
+  let payload = {...toRaw(form)}
+  if (e2eeEnabled.value) {
+    const domains = settingStore.domainList || []
+    const external = form.receiveEmail.filter((addr) => !isInternalEmail(addr, domains))
+    if (external.length) {
+      ElMessage({
+        message: t('e2eeExternalBlocked'),
+        type: 'error',
+        plain: true,
+      })
+      return
+    }
+    try {
+      if (!hasMemoryKey()) {
+        const {value: passphrase} = await ElMessageBox.prompt(t('e2eePasswordPlaceholder'), t('e2eeTitle'), {
+          inputType: 'password',
+          confirmButtonText: t('confirm'),
+          cancelButtonText: t('cancel'),
+        })
+        if (!passphrase) {
+          ElMessage({
+            message: t('e2eeNeedPassword'),
+            type: 'error',
+            plain: true,
+          })
+          return
+        }
+        await unlockWithPassword(passphrase, e2eeSalt.value)
+        e2eeUnlocked.value = true
+      }
+      const enc = await encryptEmailParts({text: form.text, content: form.content}, getMemoryKey())
+      payload = {...payload, text: enc.text, content: enc.content, e2ee: 1}
+    } catch (e) {
+      if (e === 'cancel') {
+        return
+      }
+      console.error(e)
+      ElMessage({
+        message: t('e2eeEncryptFailed'),
+        type: 'error',
+        plain: true,
+      })
+      return
+    }
+  }
+
   percentMessage = ElMessage({
     message: () => h(sendPercent, {value: percent.value, desc: t('sending')}),
     dangerouslyUseHTMLString: true,
@@ -362,7 +431,7 @@ async function sendEmail() {
 
   show.value = false
 
-  emailSend(form, (e) => {
+  emailSend(payload, (e) => {
     percent.value = Math.round((e.loaded * 98) / e.total)
   }).then(result => {
     const emailList = Array.isArray(result) ? result : result.emails
@@ -406,7 +475,7 @@ async function sendEmail() {
     ElNotification({
       title: t('sendFailMsg'),
       type: e.code === 403 ? 'warning' : 'error',
-      message: h('span', {style: 'color: teal'}, e.message),
+      message: h('span', {style: 'color: teal'}, e.message && String(e.message).includes('e2eeExternalBlocked') ? t('e2eeExternalBlocked') : friendlySendError(e.message, t)),
       position: 'bottom-right'
     })
     if (e.code === 401) {
@@ -541,6 +610,8 @@ function open() {
   }
   show.value = true;
   editor.value.focus()
+  // 第六阶段 C 路：每次打开写信框时刷新 E2EE 状态（回复/转发走 open()，草稿走 openDraft()，两处都调）。
+  loadE2eeStatus()
 }
 
 function openDraft(draft) {
@@ -549,6 +620,7 @@ function openDraft(draft) {
   setTimeout(() => defValue.value = form.content)
   show.value = true;
   editor.value.focus()
+  loadE2eeStatus()
 }
 
 const handleKeyDown = (event) => {

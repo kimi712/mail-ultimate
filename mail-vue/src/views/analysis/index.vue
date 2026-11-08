@@ -114,6 +114,68 @@
           <div class="send-count"></div>
         </div>
       </div>
+      <div class="title" v-if="riskData">{{ $t('riskTitle') }}</div>
+      <div class="picture" v-if="riskData">
+        <div class="picture-item">
+          <div class="title">{{ $t('riskRegisterTrend') }}</div>
+          <div class="risk-register-line"></div>
+        </div>
+        <div class="picture-item">
+          <div class="title">{{ $t('riskIpTop10') }}</div>
+          <el-table :data="riskData.ipTop10" style="width: 100%" max-height="330" class="risk-table">
+            <el-table-column prop="create_ip" :label="$t('registrationIp')"/>
+            <el-table-column prop="total" :label="$t('registerCount')" width="100"/>
+          </el-table>
+        </div>
+      </div>
+      <div class="number" v-if="riskData">
+        <div class="number-item">
+          <div class="top">
+            <div class="left">
+              <div>{{ $t('circuitStatus') }}</div>
+              <div>
+                <el-tag v-if="riskData.circuitEvents.open" type="danger">{{ $t('circuitOpen') }}</el-tag>
+                <el-tag v-else type="success">{{ $t('circuitClosed') }}</el-tag>
+              </div>
+            </div>
+          </div>
+          <div class="delete-ratio">
+            <div>{{ $t('circuitEvents7d') }} <span class="deleted">{{ riskData.circuitEvents.count }}</span></div>
+          </div>
+        </div>
+        <div class="number-item">
+          <div class="top">
+            <div class="left">
+              <div>{{ $t('regKeyRemaining') }}</div>
+              <div>
+                <el-statistic :formatter="value => Math.round(value)" :value="riskData.regKeyRemaining"/>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div class="number-item">
+          <div class="top">
+            <div class="left">
+              <div>{{ $t('resendDayUsage') }}</div>
+              <div>{{ riskData.resendUsage.day }} / {{ riskData.resendUsage.dayBudget }}</div>
+            </div>
+          </div>
+          <div class="delete-ratio">
+            <el-progress :percentage="resendDayPct" style="width: 100%"/>
+          </div>
+        </div>
+        <div class="number-item">
+          <div class="top">
+            <div class="left">
+              <div>{{ $t('resendMonthUsage') }}</div>
+              <div>{{ riskData.resendUsage.month }} / {{ riskData.resendUsage.monthBudget }}</div>
+            </div>
+          </div>
+          <div class="delete-ratio">
+            <el-progress :percentage="resendMonthPct" style="width: 100%"/>
+          </div>
+        </div>
+      </div>
     </div>
   </el-scrollbar>
 </template>
@@ -174,6 +236,23 @@ const userData = useTransition(userTotal, {
 })
 
 const senderData = ref(null)
+const riskData = ref(null)
+const riskLineData = reactive({
+  xdata: [],
+  sdata: []
+})
+
+// Phase 2 C 路：Resend 用量进度（risk.resendUsage），超预算时封顶 100%
+const resendDayPct = computed(() => {
+  const usage = riskData.value?.resendUsage
+  if (!usage || !usage.dayBudget) return 0
+  return Math.min(100, Math.round(usage.day / usage.dayBudget * 100))
+})
+const resendMonthPct = computed(() => {
+  const usage = riskData.value?.resendUsage
+  if (!usage || !usage.monthBudget) return 0
+  return Math.min(100, Math.round(usage.month / usage.monthBudget * 100))
+})
 const userLineData = reactive({
   xdata: [],
   sdata: []
@@ -200,6 +279,7 @@ let daySendTotal = 0
 let leaveWidth = 0
 let senderPie = null
 let increaseLine = null
+let riskRegisterLine = null
 let emailColumn = null
 let sendGauge = null
 let first = true
@@ -237,6 +317,12 @@ onMounted(() => {
     emailColumnData.receiveData = data.emailDayCount.receiveDayCount.map(item => item.total)
     emailColumnData.sendData = data.emailDayCount.sendDayCount.map(item => item.total)
     daySendTotal = data.daySendTotal
+    // Phase 2 C 路：风控数据（risk 缺失时整个风控区不渲染，旧接口仍可用）
+    if (data.risk) {
+      riskData.value = data.risk
+      riskLineData.xdata = data.risk.registerTrend.map(item => dayjs(item.date).format("M.D"));
+      riskLineData.sdata = data.risk.registerTrend.map(item => item.total)
+    }
     analysisLoading.value = false
     initPicture();
     first = false
@@ -289,6 +375,7 @@ function initPicture() {
   setTimeout(() => {
     createSenderPie()
     createIncreaseLine()
+    createRiskRegisterLine()
     createEmailColumnChart();
     createSendGauge();
   })
@@ -538,6 +625,156 @@ function createIncreaseLine() {
       left: left
     }
   });
+}
+
+// Phase 2 C 路：注册趋势折线（risk.registerTrend），复用用户增长折线的样式
+function createRiskRegisterLine() {
+
+  if (!riskData.value) {
+    return
+  }
+
+  if (riskRegisterLine) {
+    riskRegisterLine.dispose()
+  }
+
+  const el = document.querySelector(".risk-register-line")
+  if (!el) {
+    return
+  }
+  riskRegisterLine = echarts.init(el)
+
+  let option = {
+    tooltip: {
+      trigger: 'axis',
+      axisPointer: {
+        type: 'cross',
+        crossStyle: {
+          color: topic.value.crossColor
+        },
+        lineStyle: {
+          color: topic.value.crossColor
+        },
+        axis: 'x',
+      },
+      formatter: function (params) {
+        let result = ''
+        params.forEach(item => {
+          result = `${item.marker} ${t('registerCount')} ${item.value}`;
+        });
+        return result;
+      },
+      backgroundColor: topic.value.background,
+      borderColor: topic.value.splitLineColor,
+      borderWidth: 1,
+      padding: 10,
+      textStyle: {
+        color: topic.value.color,
+      }
+    },
+    grid: {
+      top: '8%',
+      right: '20',
+      left: '35',
+      bottom: '35'
+    },
+    xAxis: {
+      type: 'category',
+      data: riskLineData.xdata,
+      axisTick: {
+        show: false,
+        alignWithLabel: false,
+        lineStyle: {
+          color: topic.value.axisColor,
+        }
+      },
+      axisPointer: {
+        label: {
+          show: false
+        }
+      },
+      axisLine: {
+        lineStyle: {
+          color: topic.value.axisColor,
+          width: 1,
+          type: 'solid'
+        }
+      },
+      axisLabel: {
+        formatter: function (value, index) {
+          if (index === 0) {
+            return '      ' + value;
+          }
+          if (index === riskLineData.xdata.length - 1) {
+            return value + '   '
+          }
+          return value;
+        },
+
+      },
+      boundaryGap: false,
+    },
+    yAxis: {
+      type: 'value',
+      axisLabel: {
+        margin: 5,
+      },
+      boundaryGap: [0, 0.1],
+      max: (params) => {
+        if (params.max < 8) {
+          return 10
+        }
+      },
+      axisLine: {
+        show: true,
+        lineStyle: {
+          color: topic.value.axisColor,
+          width: 1,
+        }
+      },
+      axisPointer: {
+        label: {
+          show: true,
+          formatter: (e) => {
+            return Math.round(e.value)
+          }
+        }
+      },
+      splitLine: {
+        show: true,
+        lineStyle: {
+          type: 'dashed',
+          color: topic.value.scaleLineColor
+        }
+      }
+    },
+    series: [
+      {
+        data: riskLineData.sdata,
+        type: 'line',
+        smooth: 0.1,
+        symbol: 'none',
+        lineStyle: {
+          color: '#FF7F50',
+          width: 2.5
+        },
+        areaStyle: {
+          color: new echarts.graphic.LinearGradient(0, 0, 0, 1, [
+            {
+              offset: 0,
+              color: 'rgba(255, 127, 80, 0.3)'
+            },
+            {
+              offset: 1,
+              color: 'rgba(255, 127, 80, 0.03)'
+            }
+          ])
+        },
+        color: ['#FF7F50'],
+      }
+    ]
+  };
+  riskRegisterLine.setOption(option);
 }
 
 function createEmailColumnChart() {
@@ -889,6 +1126,17 @@ function createSendGauge() {
         @media (max-width: 767px) {
           height: 280px;
         }
+      }
+
+      .risk-register-line {
+        height: 330px;
+        @media (max-width: 767px) {
+          height: 280px;
+        }
+      }
+
+      .risk-table {
+        padding: 5px 15px 15px;
       }
     }
   }

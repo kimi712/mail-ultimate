@@ -1,0 +1,25 @@
+[Unit]
+Description=Mail Ultimate Oracle Patrol - aevorynthtech.com 风控巡检
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 主服务跑在 3 核 18G 甲骨文实例（129.225.13.58，ubuntu 用户）；
+# 热备跑在 1 核 6G 实例，同文件、同配置，平时不启动，故障时手动启动（见 README 部署节）。
+User=ubuntu
+WorkingDirectory=/opt/oracle-patrol
+# 密码与密钥优先走环境变量：/etc/oracle-patrol.env（root:root 0600），内容示例：
+#   MAIL_PATROL_ADMIN_PASSWORD=...
+#   CF_API_TOKEN=...（也可只放密码，其余放 config.json）
+EnvironmentFile=/etc/oracle-patrol.env
+ExecStart=/usr/bin/node /opt/oracle-patrol/src/index.js
+Restart=always
+RestartSec=10
+# 巡检本身是无状态轮询（state.json 在 WorkingDirectory 下），重启即恢复；
+# 连续 3 轮失败会发 TG“巡检失联”告警，恢复后发“巡检恢复”。
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

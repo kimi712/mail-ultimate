@@ -218,3 +218,25 @@ html[data-theme-to="light"]::view-transition-old(root) {
     from { clip-path: circle(var(--vt-end-radius, 0px) at var(--vt-x) var(--vt-y)); }
     to   { clip-path: circle(0px at var(--vt-x) var(--vt-y)); }
 }
+
+/* Phase 2 A 路补充：布局密度——紧凑模式压缩邮件列表行高。
+   舒适模式为默认样式，无需额外规则；偏好由 utils/preferences.js
+   以 html[data-density] 属性应用，切换即时生效。 */
+html[data-density="compact"] .email-row {
+    height: 38px !important;
+    padding: 4px 0 !important;
+}
+
+html[data-density="compact"] .email-row.all-email {
+    height: 52px !important;
+}
+
+@media (max-width: 1366px) {
+    html[data-density="compact"] .email-row {
+        height: 64px !important;
+    }
+
+    html[data-density="compact"] .email-row.all-email {
+        height: 100px !important;
+    }
+}

@@ -151,6 +151,20 @@ export const verifyRecordType = {
 	ADD: 1,
 }
 
+export const ipBlocklistConst = {
+	scope: {
+		REGISTER: 0,
+		ACCESS: 1
+	}
+}
+
+export const registerLogConst = {
+	result: {
+		SUCCESS: 0,
+		FAIL: 1
+	}
+}
+
 
 export const isDel = {
 	DELETE: 1,

@@ -22,9 +22,11 @@ import { t } from '../i18n/i18n'
 import domainUtils from '../utils/domain-uitls';
 import account from "../entity/account";
 import { att } from '../entity/att';
+import quotaService from './quota-service';
 import telegramService from './telegram-service';
 import webhookService from './webhook-service';
 import forwardMime from '../utils/forward-mime';
+import userSecurityService from './user-security-service';
 
 const emailService = {
 
@@ -342,6 +344,7 @@ const emailService = {
 			text, //邮件纯文本
 			content, //邮件内容
 			subject, //邮件标题
+			e2ee, // Phase 6：端到端加密标记（0/1），客户端加密后传 1，存 email.e2ee 列
 			attachments = [] //附件
 		} = params;
 
@@ -362,6 +365,14 @@ const emailService = {
 			const domain = '@' + emailUtils.getDomain(email);
 			return domainList.includes(domain);
 		});
+
+		// Phase 6：E2EE 后端门。发件用户 e2ee_enabled=1 且收件人含站外地址时拒发
+		// （加密内容不能走站外中继；服务端不解密、不校验密文内容）。
+		if (!allInternal && await userSecurityService.isE2eeEnabled(c, userId)) {
+			throw new BizError(t('e2eeExternalBlocked'), 400);
+		}
+
+		const e2eeFlag = Number(e2ee) === 1 ? 1 : 0;
 
 		if (c.env.admin !== userRow.email) {
 
@@ -467,17 +478,30 @@ const emailService = {
 				sendEmail: accountRow.email,
 				messageId: emailRow.messageId,
 				sendType, useCloudflareEmail, roleRow, r2Domain,
-				imageDataList, attachments
+				imageDataList, attachments,
+				e2ee: e2eeFlag
 			}
 		};
 
+		// 有站外收件人时看一眼 Resend 配额水位（best-effort，maybeAlertQuota 永不抛错）。
+		if (!allInternal) {
+			await quotaService.maybeAlertQuota(c);
+		}
+
 		// 全部站内收件人走本地投递；存在站外收件人时优先 CF，其次 Resend。
+		// 注意：CF 已配时现有逻辑永远走 CF、Resend 根本不用；“撞线切 CF”在本实现里
+		// 体现为——Resend 是无 CF 时的唯一外发通道，撞线即停发并告警（见下），
+		// 一旦配了 CF，useCloudflareEmail 分支天然优先。渠道优先级未改。
 		let deliveries;
 		if (allInternal) {
 			deliveries = this.sendInternal(c, context);
 		} else if (useCloudflareEmail) {
 			deliveries = this.sendCloudflare(c, context);
 		} else {
+			// 进 Resend 分支前查配额：日/月任一超预算即停发，不调 Resend、不写发送记录。
+			if (!await quotaService.hasResendBudget(c)) {
+				throw new BizError(t('resendQuotaExhausted'));
+			}
 			deliveries = this.sendResend(c, context);
 		}
 
@@ -580,6 +604,16 @@ const emailService = {
 				...saveParams, receiveEmail: item.receiveEmail, providerId: item.id
 			}));
 		}
+		// Resend API 成功后按实际成功收件人数计配额（普通发送一封多收件人按收件人数；
+		// 分开发送按保存成功的封数；失败不计）。不能用 emails.length：普通发送只有 1 条记录。
+		const sentCount = emails.reduce((n, e) => {
+			try {
+				return n + JSON.parse(e.recipient || '[]').length;
+			} catch (err) {
+				return n + 1;
+			}
+		}, 0);
+		await quotaService.recordResendSent(c, sentCount);
 		yield { emails };
 	},
 
@@ -588,7 +622,7 @@ const emailService = {
 		const {
 			accountId, userId, name, subject, text, html, sendEmail, receiveEmail,
 			providerId, messageId, sendType, useCloudflareEmail,
-			roleRow, r2Domain, attachments
+			roleRow, r2Domain, attachments, e2ee
 		} = params;
 		const imageDataList = params.imageDataList.map(item => ({
 			...item, contentId: `<${item.contentId.replace(/^<|>$/g, '')}>`
@@ -599,6 +633,7 @@ const emailService = {
 			status: useCloudflareEmail ? emailConst.status.DELIVERED : emailConst.status.SENT,
 			type: emailConst.type.SEND,
 			resendEmailId: providerId,
+			e2ee: e2ee ? 1 : 0,
 			recipient: JSON.stringify(receiveEmail.map(address => ({ address, name: '' })))
 		};
 		if (sendType === 'reply') {

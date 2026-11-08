@@ -42,14 +42,30 @@
             placeholder="Select"
             @change="changeLang"
         >
-          <el-option label="中文" value="zh" @pointerdown.prevent.stop="changeLang('zh')"/>
-          <el-option label="English" value="en" @pointerdown.prevent.stop="changeLang('en')"/>
+          <el-option v-for="item in SUPPORTED_LOCALES" :key="item.short" :label="item.label" :value="item.short" @pointerdown.prevent.stop="changeLang(item.short)"/>
         </el-select>
       </div>
     </div>
     <div class="preference-item">
       <div class="title" id="theme-label">{{$t('themeStyle')}}</div>
       <ThemeSelector/>
+    </div>
+    <div class="preference-item">
+      <div class="title">{{$t('densitySetting')}}</div>
+      <div class="language-row setting-row">
+        <div>{{$t('densitySetting')}}</div>
+        <el-radio-group v-model="density" @change="onDensityChange">
+          <el-radio value="comfortable">{{ $t('densityComfortable') }}</el-radio>
+          <el-radio value="compact">{{ $t('densityCompact') }}</el-radio>
+        </el-radio-group>
+      </div>
+    </div>
+    <div class="preference-item">
+      <div class="title">{{$t('noticeSetting')}}</div>
+      <div class="language-row setting-row">
+        <div>{{$t('loginNotice')}}</div>
+        <el-switch v-model="noticeOn" @change="onNoticeChange" />
+      </div>
     </div>
     <div class="preference-item">
       <div class="title">{{$t('noticeTitle')}}</div>
@@ -59,6 +75,20 @@
           <el-button @click="uiStore.showNotice()">{{$t('viewNotice')}}</el-button>
         </div>
       </div>
+    </div>
+    <div class="preference-item">
+      <div class="title">{{$t('loginLogTitle')}}</div>
+      <el-table :data="loginLogList" v-loading="loginLogLoading" style="width: 100%" :empty-text="$t('loginLogEmpty')">
+        <el-table-column prop="createTime" :label="$t('loginLogTime')" width="180" />
+        <el-table-column prop="ip" :label="$t('loginLogIp')" width="160" />
+        <el-table-column prop="ua" :label="$t('loginLogDevice')" />
+        <el-table-column :label="$t('loginLogNewIp')" width="110">
+          <template #default="{row}">
+            <el-tag v-if="row.isNewIp === 1" type="warning">{{ $t('loginLogIsNew') }}</el-tag>
+            <el-tag v-else type="info">{{ $t('loginLogNotNew') }}</el-tag>
+          </template>
+        </el-table-column>
+      </el-table>
     </div>
     <div class="del-email" v-perm="'my:delete'">
       <div class="title">{{$t('deleteUser')}}</div>
@@ -81,8 +111,11 @@
   </div>
 </template>
 <script setup>
-import {reactive, ref, defineOptions} from 'vue'
-import {resetPassword, userDelete} from "@/request/my.js";
+import {reactive, ref, defineOptions, onMounted} from 'vue'
+import {resetPassword, userDelete, loginLog, setLocale} from "@/request/my.js";
+import i18n from "@/i18n/index.js";
+import { SUPPORTED_LOCALES, SHORT_CODES, applyLocale, toStoredLocale } from "@/i18n/locale.js";
+import { loadPrefs, savePrefs, applyPrefs } from "@/utils/preferences.js";
 import {useUserStore} from "@/store/user.js";
 import router from "@/router/index.js";
 import {accountSetName} from "@/request/account.js";
@@ -101,6 +134,36 @@ const setPwdLoading = ref(false)
 const setNameShow = ref(false)
 const accountName = ref(null)
 const langSelect = ref(settingStore.lang)
+
+// Phase 2 A 路：登录记录（GET /my/loginLog，仅本人数据，最近 20 条）
+const loginLogList = ref([])
+const loginLogLoading = ref(false)
+function fetchLoginLog() {
+  loginLogLoading.value = true
+  loginLog({num: 1, size: 20}).then(data => {
+    loginLogList.value = data.list || []
+    loginLogLoading.value = false
+  }).catch(() => {
+    loginLogLoading.value = false
+  })
+}
+onMounted(fetchLoginLog)
+
+// Phase 2 A 路补充：个性化偏好——布局密度与登录公告开关。
+// 存 localStorage mail-prefs，切换即时生效并持久化（刷新后保持）。
+const density = ref(loadPrefs().density)
+const noticeOn = ref(loadPrefs().notice)
+function onDensityChange() {
+  const prefs = loadPrefs()
+  prefs.density = density.value
+  savePrefs(prefs)
+  applyPrefs(prefs, uiStore)
+}
+function onNoticeChange() {
+  const prefs = loadPrefs()
+  prefs.notice = noticeOn.value
+  savePrefs(prefs)
+}
 
 defineOptions({
   name: 'setting'
@@ -146,14 +209,17 @@ function setName() {
 }
 
 function changeLang(lang) {
-  let setting = {}
-  try {
-    setting = JSON.parse(localStorage.getItem('setting') || '{}')
-  } catch (e) {
-    setting = {}
+  // Phase 2 A 路补充：8 语种即时切换（不刷新）+ 登录态下同步到后端 user.locale。
+  // el-option 的 pointerdown 与 el-select 的 change 会各触发一次，用当前语言去重。
+  if (!SHORT_CODES.includes(lang) || lang === settingStore.lang) {
+    return
   }
-  localStorage.setItem('setting', JSON.stringify({...setting, lang}))
-  window.location.reload()
+  applyLocale(i18n, settingStore, lang).then(() => {
+    langSelect.value = lang
+  })
+  setLocale(toStoredLocale(lang)).catch(() => {
+    // best-effort：后端同步失败不弹错，下次登录时再同步
+  })
 }
 
 const pwdShow = ref(false)
@@ -332,7 +398,7 @@ function submitPwd() {
   }
 
   .language-select {
-    width: 110px;
+    width: 150px;
     max-width: 100%;
   }
 

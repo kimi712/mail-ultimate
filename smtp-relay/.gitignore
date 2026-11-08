@@ -1,0 +1,5 @@
+# 真实配置与运行日志，绝不提交
+config.json
+*.log
+node_modules/
+

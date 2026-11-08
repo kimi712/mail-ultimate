@@ -6,6 +6,11 @@ import BizError from '../error/biz-error';
 import { toUtc } from '../utils/date-uitil';
 import userService from './user-service';
 import { t } from '../i18n/i18n.js';
+import auditLogService from './audit-log-service';
+import settingService from './setting-service';
+import telegramService from './telegram-service';
+import dayjs from 'dayjs';
+import KvConst from '../const/kv-const';
 
 const regKeyService = {
 
@@ -43,12 +48,24 @@ const regKeyService = {
 		expireTime = expireUtc.format('YYYY-MM-DD HH:mm:ss')
 
 		await orm(c).insert(regKey).values({code,roleId,count,userId,expireTime}).run();
+		await auditLogService.record(c, {
+			action: 'reg-key:add',
+			targetType: 'reg_key',
+			targetId: code,
+			detail: { code, roleId, count }
+		});
 	},
 
 	async delete(c, params) {
 		let {regKeyIds} = params;
 		regKeyIds = regKeyIds.split(',').map(id => Number(id));
 		await orm(c).delete(regKey).where(inArray(regKey.regKeyId,regKeyIds)).run();
+		await auditLogService.record(c, {
+			action: 'reg-key:delete',
+			targetType: 'reg_key',
+			targetId: params.regKeyIds,
+			detail: { regKeyIds: params.regKeyIds }
+		});
 	},
 
 	async clearNotUse(c) {
@@ -107,6 +124,33 @@ const regKeyService = {
 	async history(c, params) {
 		const { regKeyId } = params;
 		return userService.listByRegKeyId(c, regKeyId);
+	},
+
+	// Phase 2 A 路：密钥库存告警。读 setting.regKeyAlertThreshold（默认 500），
+	// 查未过期密钥剩余总量（count > 0 且未过期）；低于阈值发 TG 告警
+	// （sendAlert 第三参数 'reg-key'），每天最多 1 次（KV REG_KEY_ALERT_DAY + 日期去重）。
+	// 全程 try/catch，永不抛错，不得影响注册主流程。
+	async maybeAlertLowStock(c) {
+		try {
+			const setting = await settingService.query(c);
+			const threshold = setting.regKeyAlertThreshold ?? 500;
+			const row = await c.env.db.prepare(
+				`SELECT COALESCE(SUM(count), 0) AS total FROM reg_key WHERE count > 0 AND datetime(expire_time) > datetime('now')`
+			).first();
+			const remaining = Number(row?.total) || 0;
+			if (remaining >= threshold) {
+				return;
+			}
+			const dateStr = dayjs().format('YYYY-MM-DD');
+			const flagKey = KvConst.REG_KEY_ALERT_DAY + dateStr;
+			if (await c.env.kv.get(flagKey)) {
+				return;
+			}
+			await c.env.kv.put(flagKey, '1', { expirationTtl: 60 * 60 * 24 });
+			await telegramService.sendAlert(c, `⚠️ 注册密钥库存告警\n剩余总量 ${remaining}（阈值 ${threshold}），请及时补充密钥。`, 'reg-key');
+		} catch (e) {
+			console.error('注册密钥库存告警失败:', e.message);
+		}
 	}
 }
 

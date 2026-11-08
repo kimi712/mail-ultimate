@@ -12,7 +12,7 @@ const oauthService = {
 
 	async bindUser(c, params) {
 
-		const { email, oauthUserId, code } = params;
+		const { email, oauthUserId, code, token } = params;
 
 		const oauthRow = await this.getById(c, oauthUserId);
 
@@ -22,14 +22,19 @@ const oauthService = {
 			throw new BizError('用户已绑定有邮箱')
 		}
 
-		await loginService.register(c, { email, password: cryptoUtils.genRandomPwd(), code }, true);
+		await loginService.register(c, { email, password: cryptoUtils.genRandomPwd(), code, token });
 
 		userRow = await userService.selectByEmail(c, email);
 
 		orm(c).update(oauth).set({ userId: userRow.userId }).where(eq(oauth.oauthUserId, oauthUserId)).run();
-		const jwtToken = await loginService.login(c, { email, password: null }, true);
+		const loginResult = await loginService.login(c, { email, password: null }, true);
 
-		return { userInfo: oauthRow, token: jwtToken}
+		// Phase 6：该用户开启 TOTP 时 login() 返回 {needTotp, totpToken} 而非 JWT，
+		// 原样透传给前端走 POST /login/totp，不把对象当成 token。
+		if (loginResult && typeof loginResult === 'object' && loginResult.needTotp) {
+			return { userInfo: oauthRow, token: null, needTotp: true, totpToken: loginResult.totpToken };
+		}
+		return { userInfo: oauthRow, token: loginResult }
 	},
 
 	async linuxDoLogin(c, params) {
@@ -188,8 +193,12 @@ const oauthService = {
 			return { userInfo: oauthRow, token: null };
 		}
 
-		const JwtToken = await loginService.login(c, { email: userRow.email, password: null }, true);
-		return { userInfo: oauthRow, token: JwtToken };
+		const loginResult = await loginService.login(c, { email: userRow.email, password: null }, true);
+		// Phase 6：见 bindUser（TOTP 开启时透传 needTotp/totpToken）。
+		if (loginResult && typeof loginResult === 'object' && loginResult.needTotp) {
+			return { userInfo: oauthRow, token: null, needTotp: true, totpToken: loginResult.totpToken };
+		}
+		return { userInfo: oauthRow, token: loginResult };
 	},
 
 	async saveUser(c, userInfo) {

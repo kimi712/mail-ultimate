@@ -17,6 +17,8 @@ const user = sqliteTable('user', {
 	sort: text('sort').default(0),
 	sendCount: text('send_count').default(0),
 	regKeyId: integer('reg_key_id').default(0).notNull(),
-	isDel: integer('is_del').default(0).notNull()
+	isDel: integer('is_del').default(0).notNull(),
+	// Phase 2–4：用户语言偏好（localStorage 为主，登录后同步到后端；空 = 跟随浏览器/默认中文）
+	locale: text('locale').notNull().default('')
 });
 export default user

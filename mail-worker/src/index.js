@@ -6,6 +6,7 @@ import emailService from './service/email-service';
 import r2Service from './service/r2-service';
 import oauthService from './service/oauth-service';
 import analysisService from './service/analysis-service';
+import logRetentionService from './service/log-retention-service';
 export default {
 	 async fetch(req, env, ctx) {
 
@@ -41,6 +42,12 @@ export default {
 		await userService.resetDaySendCount({ env })
 		await emailService.completeReceiveAll({ env })
 		await emailService.autoClean({ env })
+		// Phase 6：日志留存清理（每小时分支；best-effort，永不阻断 cron）。
+		try {
+			await logRetentionService.cleanup({ env });
+		} catch (e) {
+			console.error('日志留存清理失败:', e.message);
+		}
 		await analysisService.refreshEchartsCache({ env })
 		await oauthService.clearNoBindOathUser({ env })
 	},

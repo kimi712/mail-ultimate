@@ -1,0 +1,29 @@
+{
+	// Phase 1 本地测试专用配置（vitest.config.js 指向本文件）。
+	// 仅本地 miniflare 存储：D1/KV 均为占位 id，不连任何线上库；
+	// jwt_secret 为本地测试 dummy，不得用于真实部署。
+	"name": "cloud-mail-phase1-test",
+	"main": "src/index.js",
+	"compatibility_date": "2025-06-04",
+	"vars": {
+		"domain": ["example.com"],
+		"admin": "admin@example.com",
+		"jwt_secret": "phase1-local-test-only-not-a-real-secret",
+		"field_enc_key": "phase56-local-test-only-not-a-real-secret",
+		"analysis_cache": false,
+		"orm_log": false
+	},
+	"d1_databases": [
+		{
+			"binding": "db",
+			"database_name": "phase1-test-local",
+			"database_id": "00000000-0000-0000-0000-000000000000"
+		}
+	],
+	"kv_namespaces": [
+		{
+			"binding": "kv",
+			"id": "00000000000000000000000000000000"
+		}
+	]
+}

@@ -1,0 +1,1 @@
+{"dependencies":{"mailparser":"^3.14.2"},"description":"终极版邮箱 SMTP 中继：协议适配器，只调现有 Worker 接口（POST /login 验用户、POST /email/send 发信），绝不直调 Resend、不直写 D1、不直调 CF API 发信","engines":{"node":">=18"},"name":"smtp-relay","private":true,"scripts":{"start":"node src/index.js","test":"node --test"},"type":"module","version":"1.0.0"}

@@ -1,0 +1,27 @@
+[Unit]
+Description=Mail Ultimate SMTP Relay - aevorynthtech.com SMTP 提交中继
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+# 主服务跑在 3 核 18G 甲骨文实例（ubuntu 用户），与巡检同机；
+# 热备跑在 1 核 6G 实例，同文件、同配置，平时不启动，故障时手动启动（见 SMTP-DEPLOY.md）。
+# 注意：守护进程只监听 127.0.0.1:2525（+ 可选 465 隐式 TLS），对外由 cloudflared Tunnel 暴露；
+# 绝不在此打开 25 端口。
+User=ubuntu
+WorkingDirectory=/opt/smtp-relay
+# TG 凭证优先走环境变量：/etc/smtp-relay.env（root:root 0600），内容示例：
+#   TG_BOT_TOKEN=...
+#   TG_CHAT_ID=...
+EnvironmentFile=/etc/smtp-relay.env
+ExecStart=/usr/bin/node /opt/smtp-relay/src/index.js
+Restart=always
+RestartSec=10
+# 守护进程是无状态协议适配器（限流/JWT 缓存全在内存），重启即恢复；
+# 重启后已建立的 SMTP 会话会断开，客户端按标准流程重连重试即可。
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

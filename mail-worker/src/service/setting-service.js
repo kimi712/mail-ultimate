@@ -10,12 +10,30 @@ import {t} from '../i18n/i18n'
 import verifyRecordService from './verify-record-service';
 import userContext from '../security/user-context';
 import domainUtils from '../utils/domain-uitls';
+import auditLogService from './audit-log-service';
+import fieldCrypto from '../utils/field-crypto';
+
+// Phase 6：应用层加密字段（契约 §1.5）。resendTokens 是整段 JSON 字符串，单独处理。
+const ENCRYPTED_SETTING_FIELDS = ['secretKey', 'tgBotToken', 's3SecretKey', 's3AccessKey', 'githubClientSecret', 'googleClientSecret', 'linuxdoClientSecret'];
 
 const settingService = {
 
 	async refresh(c) {
 		const settingRow = await orm(c).select().from(setting).get();
-		settingRow.resendTokens = JSON.parse(settingRow.resendTokens);
+		// Phase 6：读库后解密（KV 缓存里仍是解密后的值，与现行行为一致）；
+		// 非信封值（老站明文存量）由 decrypt 原样返回；无 key 时同样原样返回。
+		for (const field of ENCRYPTED_SETTING_FIELDS) {
+			if (typeof settingRow[field] === 'string' && settingRow[field] !== '') {
+				settingRow[field] = await fieldCrypto.decrypt(c, settingRow[field]);
+			}
+		}
+		const rawTokens = await fieldCrypto.decrypt(c, settingRow.resendTokens);
+		try {
+			settingRow.resendTokens = JSON.parse(rawTokens || '{}');
+		} catch (e) {
+			console.error('解析 resendTokens 失败，使用空对象:', e.message);
+			settingRow.resendTokens = {};
+		}
 		settingRow.r2Domain = '';
 		c.set('setting', settingRow);
 		await c.env.kv.put(KvConst.SETTING, JSON.stringify(settingRow));
@@ -132,8 +150,25 @@ const settingService = {
 
 		params.resendTokens = JSON.stringify(resendTokens);
 
+		// Phase 6：写入前加密敏感字段（已是信封格式的值不重复加密；空值不加密）。
+		for (const field of ENCRYPTED_SETTING_FIELDS) {
+			if (typeof params[field] === 'string' && params[field] !== '' && !fieldCrypto.isEncrypted(params[field])) {
+				params[field] = await fieldCrypto.encrypt(c, params[field]);
+			}
+		}
+		if (typeof params.resendTokens === 'string' && params.resendTokens !== '' && params.resendTokens !== '{}' && !fieldCrypto.isEncrypted(params.resendTokens)) {
+			params.resendTokens = await fieldCrypto.encrypt(c, params.resendTokens);
+		}
+
 		await orm(c).update(setting).set({ ...params }).returning().get();
 		await this.refresh(c);
+		// 审计：detail 只含被改的 key 列表，不含任何密钥值（record 永不抛错）。
+		await auditLogService.record(c, {
+			action: 'setting:update',
+			targetType: 'setting',
+			targetId: '',
+			detail: { keys: Object.keys(params) }
+		});
 	},
 
 	async deleteBackground(c) {

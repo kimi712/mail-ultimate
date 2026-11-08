@@ -17,6 +17,20 @@
         <el-option :key="1" :label="$t('banned')" :value="1"/>
         <el-option :key="-2" :label="$t('deleted')" :value="-2"/>
       </el-select>
+      <div class="search">
+        <el-input
+            v-model="params.createIp"
+            class="search-input"
+            :placeholder="$t('searchByCreateIp')"
+        >
+        </el-input>
+      </div>
+      <el-select v-model="ipFilterMode" class="status-select" style="width: 90px" :title="$t('ipFilterMode')">
+        <el-option :label="$t('ipExact')" value="exact"/>
+        <el-option :label="$t('ipPrefix')" value="prefix"/>
+      </el-select>
+      <Icon class="icon" icon="material-symbols:download" width="20" height="20" @click="exportUsers"
+            :title="$t('exportCsv')"/>
       <Icon class="icon" icon="iconoir:search" @click="search" width="20" height="20"/>
       <Icon class="icon" @click="changeTimeSort" icon="material-symbols-light:timer-arrow-down-outline"
             v-if="params.timeSort === 1" width="28" height="28"/>
@@ -61,6 +75,7 @@
               </div>
             </template>
           </el-table-column>
+          <el-table-column v-if="createIpShow" :label="$t('registrationIp')" min-width="140" prop="createIp"/>
           <el-table-column :formatter="formatterReceive" label-class-name="receive" column-key="receive"
                            :filtered-value="filteredValue" :filters="filters" :width="receiveWidth"
                            :label="$t('tabReceived')"
@@ -388,8 +403,10 @@ import {
   userRestSendCount,
   userRestore,
   userDeleteAccount,
-  userAllAccount
+  userAllAccount,
+  userExportCsv
 } from '@/request/user.js'
+import dayjs from "dayjs";
 import {roleSelectUse} from "@/request/role.js";
 import {Icon} from "@iconify/vue";
 import loading from "@/components/loading/index.vue";
@@ -432,6 +449,9 @@ const accountNumShow = ref(true)
 const createTimeShow = ref(true)
 const statusShow = ref(true)
 const typeShow = ref(true)
+const createIpShow = ref(true)
+const ipFilterMode = ref('exact')
+const exportLoading = ref(false)
 const receiveWidth = ref(null)
 const phonePageShow = ref(false)
 const detailsShow = ref(false);
@@ -470,6 +490,7 @@ const addForm = reactive({
 
 const params = reactive({
   email: '',
+  createIp: '',
   num: 1,
   size: 15,
   timeSort: 0,
@@ -512,6 +533,7 @@ if (paramsStar) {
   params.size = localParams.size
   params.timeSort = localParams.timeSort
   params.status = localParams.status
+  params.createIp = localParams.createIp || ''
 }
 
 watch(() => params, () => {
@@ -996,6 +1018,7 @@ function openSetPwd(user) {
 
 function refresh() {
   params.email = ''
+  params.createIp = ''
   params.num = 1
   params.status = -1
   params.timeSort = 0
@@ -1010,6 +1033,44 @@ function changeTimeSort() {
   params.num = 1
   params.timeSort = params.timeSort ? 0 : 1
   getUserList()
+}
+
+function exportUsers() {
+  if (exportLoading.value) return
+  exportLoading.value = true
+  const exportParams = {...params}
+  delete exportParams.num
+  delete exportParams.size
+  delete exportParams.timeSort
+  if (exportParams.status === -2) {
+    delete exportParams.status
+    exportParams.isDel = 1
+  }
+  if (exportParams.createIp && ipFilterMode.value === 'prefix') {
+    exportParams.createIpPrefix = exportParams.createIp
+    delete exportParams.createIp
+  }
+  userExportCsv(exportParams).then(blob => {
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    a.href = url
+    a.download = `users-${dayjs().format('YYYY-MM-DD')}.csv`
+    a.click()
+    URL.revokeObjectURL(url)
+    ElMessage({
+      message: t('exportSuccessMsg'),
+      type: "success",
+      plain: true
+    })
+  }).catch(err => {
+    ElMessage({
+      message: err.message || t('exportFailedMsg'),
+      type: "error",
+      plain: true
+    })
+  }).finally(() => {
+    exportLoading.value = false
+  })
 }
 
 function numChange(num) {
@@ -1030,6 +1091,11 @@ function getUserList(loading = true) {
   if (newParams.status === -2) {
     delete newParams.status
     newParams.isDel = 1
+  }
+  // IP 筛选：精确与前缀二选一；前缀模式把 createIp 改写为 createIpPrefix
+  if (newParams.createIp && ipFilterMode.value === 'prefix') {
+    newParams.createIpPrefix = newParams.createIp
+    delete newParams.createIp
   }
   userList(newParams).then(data => {
     users.value = data.list.map(item => ({...item, checkedClass: ''}))
@@ -1053,6 +1119,7 @@ function adjustWidth() {
   const width = window.innerWidth
   statusShow.value = width > 1090
   createTimeShow.value = width > 1367
+  createIpShow.value = width > 900
   accountNumShow.value = width > 650
   sendNumShow.value = width > 685
   typeShow.value = width > 767

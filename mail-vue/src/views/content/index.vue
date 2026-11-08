@@ -41,9 +41,18 @@
             <el-alert v-if="email.status === 4" :closable="false" :title="$t('complained')" class="email-msg" type="warning" show-icon />
             <el-alert v-if="email.status === 5" :closable="false" :title="$t('delayed')" class="email-msg" type="warning" show-icon />
           </div>
+          <div v-if="email.e2ee === 1 && e2eeState !== 'ready'" class="e2ee-box">
+            <el-alert :closable="false" :title="$t('e2eeLockedTitle')" type="warning" show-icon />
+            <div class="desc">{{ $t('e2eeLockedDesc') }}</div>
+            <div class="e2ee-unlock-row">
+              <el-input v-model="e2eePassword" type="password" :placeholder="$t('e2eePasswordPlaceholder')" autocomplete="off" @keyup.enter="unlockE2ee" />
+              <el-button type="primary" :loading="e2eeDecrypting" @click="unlockE2ee">{{ $t('e2eeUnlock') }}</el-button>
+            </div>
+            <el-alert v-if="e2eeState === 'error'" :closable="false" :title="$t('e2eeDecryptFailed')" type="error" show-icon />
+          </div>
           <el-scrollbar class="htm-scrollbar" :class="!email.attList?.length ? 'bottom-distance' : ''">
-            <ShadowHtml class="shadow-html" :html="formatImage(email.content)" v-if="email.content" />
-            <pre v-else class="email-text" >{{email.text}}</pre>
+            <ShadowHtml class="shadow-html" :html="formatImage(displayContent)" v-if="displayContent" />
+            <pre v-else-if="displayText || email.e2ee !== 1" class="email-text" >{{displayText}}</pre>
           </el-scrollbar>
           <div class="att" v-if="email.attList?.length > 0">
             <div class="att-title">
@@ -99,6 +108,9 @@ import {allEmailDelete} from "@/request/all-email.js";
 import {useUiStore} from "@/store/ui.js";
 import {useI18n} from "vue-i18n";
 import {EmailUnreadEnum} from "@/enums/email-enum.js";
+import {sanitizeEmailHtml} from "@/utils/email-html.js";
+import {getSecurity} from "@/request/security.js";
+import {hasMemoryKey, unlockWithPassword, decryptEmailParts, clearMemoryKey} from "@/utils/e2ee.js";
 const { t } = useI18n()
 
 const uiStore = useUiStore();
@@ -112,6 +124,137 @@ let senderResizeObserver = null
 
 const showPreview = ref(false)
 const srcList = reactive([])
+
+// 第六阶段 C 路：端到端加密邮件解密。
+// 解密结果只放在本页局部 ref 里，绝不写回 emailStore（store 会持久化 contentData，
+// 写回等于把明文落盘）。e2eeState: 'plain' 未加密 / 'locked' 未解锁 / 'decrypting'
+// 解密中 / 'ready' 已解密 / 'error' 解密失败。
+const e2eeState = ref('plain')
+const e2eePassword = ref('')
+const e2eeDecrypting = ref(false)
+const e2eeSalt = ref('')
+const decryptedContent = ref('')
+const decryptedText = ref('')
+const isE2eeMail = computed(() => email.value?.e2ee === 1)
+const displayContent = computed(() => {
+  if (isE2eeMail.value) {
+    return e2eeState.value === 'ready' ? decryptedContent.value : ''
+  }
+  return email.value?.content || ''
+})
+const displayText = computed(() => {
+  if (isE2eeMail.value) {
+    return e2eeState.value === 'ready' ? decryptedText.value : ''
+  }
+  return email.value?.text || ''
+})
+
+let e2eeMailId = 0
+async function tryDecryptE2ee() {
+  if (!hasMemoryKey()) {
+    e2eeState.value = 'locked'
+    // 懒加载 salt，供解锁时用；失败不弹错，等用户点解锁时再取
+    if (!e2eeSalt.value) {
+      getSecurity().then((d) => {
+        e2eeSalt.value = d?.e2eeSalt || ''
+      }).catch(() => {
+      })
+    }
+    return
+  }
+  const mail = email.value
+  if (!mail?.content && !mail?.text) {
+    return // 正文还没到齐，等 watch 再触发
+  }
+  e2eeState.value = 'decrypting'
+  try {
+    const parts = await decryptEmailParts({text: mail.text, content: mail.content})
+    if (email.value?.emailId !== mail.emailId) {
+      return // 解密期间切走了邮件，丢弃结果
+    }
+    decryptedText.value = parts.text
+    decryptedContent.value = sanitizeEmailHtml(parts.content)
+    e2eeState.value = 'ready'
+  } catch (e) {
+    console.error(e)
+    clearMemoryKey()
+    e2eeState.value = 'error'
+  }
+}
+
+async function unlockE2ee() {
+  if (!e2eePassword.value) {
+    ElMessage({
+      message: t('e2eeNeedPassword'),
+      type: 'error',
+      plain: true,
+    })
+    return
+  }
+  if (!e2eeSalt.value) {
+    try {
+      const d = await getSecurity()
+      e2eeSalt.value = d?.e2eeSalt || ''
+    } catch (e) {
+      // 忽略，见下 salt 为空的分支
+    }
+  }
+  if (!e2eeSalt.value) {
+    ElMessage({
+      message: t('e2eeUnlockFailed'),
+      type: 'error',
+      plain: true,
+    })
+    return
+  }
+  e2eeDecrypting.value = true
+  try {
+    await unlockWithPassword(e2eePassword.value, e2eeSalt.value)
+    e2eePassword.value = ''
+    e2eeState.value = ''
+    await tryDecryptE2ee()
+    if (e2eeState.value === 'error') {
+      ElMessage({
+        message: t('e2eeDecryptFailed'),
+        type: 'error',
+        plain: true,
+      })
+    }
+  } catch (e) {
+    console.error(e)
+    clearMemoryKey()
+    e2eeState.value = 'error'
+    ElMessage({
+      message: t('e2eeUnlockFailed'),
+      type: 'error',
+      plain: true,
+    })
+  } finally {
+    e2eeDecrypting.value = false
+  }
+}
+
+// 邮件切换 / 正文到齐时触发；error 态等用户重新解锁，不自动重试。
+watch(() => [email.value?.emailId, email.value?.e2ee, email.value?.content, email.value?.text], () => {
+  const mail = email.value
+  if (!mail || mail.e2ee !== 1) {
+    e2eeState.value = 'plain'
+    decryptedContent.value = ''
+    decryptedText.value = ''
+    e2eeMailId = 0
+    return
+  }
+  if (mail.emailId !== e2eeMailId) {
+    e2eeMailId = mail.emailId
+    e2eeState.value = ''
+    decryptedContent.value = ''
+    decryptedText.value = ''
+  }
+  if (e2eeState.value === 'error') {
+    return
+  }
+  tryDecryptE2ee()
+}, {flush: 'post', immediate: true})
 
 
 const email = computed(() => emailStore.contentData.email || {
@@ -225,11 +368,19 @@ function handleKeyDown(event) {
 }
 
 function openReply() {
-  uiStore.writerRef.openReply(email.value)
+  uiStore.writerRef.openReply(e2eeSafeEmail())
 }
 
 function openForward() {
-  uiStore.writerRef.openForward(email.value)
+  uiStore.writerRef.openForward(e2eeSafeEmail())
+}
+
+// 回复/转发加密邮件时引用解密后的正文（未解锁时仍为原文，即密文信封，不扩范围）。
+function e2eeSafeEmail() {
+  if (e2eeState.value === 'ready') {
+    return {...email.value, content: decryptedContent.value, text: decryptedText.value}
+  }
+  return email.value
 }
 
 function toMessage(message) {
@@ -547,6 +698,25 @@ const handleDelete = () => {
 
 .bottom-distance {
   margin-bottom: 30px;
+}
+
+.e2ee-box {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 20px;
+  max-width: 560px;
+
+  .desc {
+    font-size: 14px;
+    color: var(--regular-text-color);
+    line-height: 1.6;
+  }
+
+  .e2ee-unlock-row {
+    display: flex;
+    gap: 10px;
+  }
 }
 
 

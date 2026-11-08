@@ -1,0 +1,1 @@
+{"dependencies":{},"description":"甲骨文风控巡检服务：只读 D1 + 调 Worker/CF API + 发告警，巡检挂了主站不受影响（mail-ultimate 终极版邮箱 B 路）","engines":{"node":">=18"},"name":"oracle-patrol","private":true,"scripts":{"dry-run":"node src/index.js --once --dry-run","once":"node src/index.js --once","start":"node src/index.js","test":"node --test"},"type":"module","version":"1.0.0"}

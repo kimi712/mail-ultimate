@@ -7,7 +7,7 @@ export const setting = sqliteTable('setting', {
 	addEmail: integer('add_email').default(0).notNull(),
 	autoRefresh: integer('auto_refresh').default(0).notNull(),
 	addEmailVerify: integer('add_email_verify').default(1).notNull(),
-	registerVerify: integer('register_verify').default(1).notNull(),
+	registerVerify: integer('register_verify').default(0).notNull(),
 	regVerifyCount: integer('reg_verify_count').default(1).notNull(),
 	addVerifyCount: integer('add_verify_count').default(1).notNull(),
 	send: integer('send').default(1).notNull(),
@@ -67,6 +67,19 @@ export const setting = sqliteTable('setting', {
 	webhookUrl: text('webhook_url').default('').notNull(),
 	webhookStatus: integer('webhook_status').default(1).notNull(),
 	webhookRetry: integer('webhook_retry').default(0).notNull(),
-	webhookSecret: text('webhook_secret').default('').notNull()
+	webhookSecret: text('webhook_secret').default('').notNull(),
+	// Phase 1：防刷配置（D1 列由 init.js v3_5DB 建；默认值与契约 §1 一致）
+	ipRegLimit: integer('ip_reg_limit').default(3).notNull(),
+	ipRegWindowHours: integer('ip_reg_window_hours').default(24).notNull(),
+	regRateLimitPerMin: integer('reg_rate_limit_per_min').default(5).notNull(),
+	regCircuitThreshold: integer('reg_circuit_threshold').default(20).notNull(),
+	regCircuitOpen: integer('reg_circuit_open').default(0).notNull(),
+	resendDayBudget: integer('resend_day_budget').default(100).notNull(),
+	resendMonthBudget: integer('resend_month_budget').default(3000).notNull(),
+	// Phase 2–4：注册密钥库存告警阈值（剩余总量低于此值告警，默认 500）
+	regKeyAlertThreshold: integer('reg_key_alert_threshold').default(500).notNull(),
+	// Phase 6：日志留存天数（默认 90，0 = 永久保留）与日志 IP 脱敏开关（0 关 / 1 开）
+	logRetentionDays: integer('log_retention_days').default(90).notNull(),
+	logIpMask: integer('log_ip_mask').default(0).notNull()
 });
 export default setting
