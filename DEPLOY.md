@@ -1,15 +1,16 @@
 # 终极版邮箱 · 一键部署指南（aevorynthtech.com）
 
-> 状态：**只做部署准备，未实际部署**。按本文档操作前，先确认 `PHASE2-4.md` 回归清单全部打勾、且无已知 bug 未修。
+> 状态：**只做部署准备，未实际部署**。按本文档操作前，先确认 `PHASE2-4.md` §5 与 `PHASE5-6.md` §7 回归清单全部打勾、且无已知 bug 未修。
 > 新站与老站 **完全隔离**：全套全新 Worker / D1 / KV / R2 / Email Routing / Turnstile，域名 **aevorynthtech.com**；老站 mail.flame.edu.kg、D1 `cloud-mail`、Worker `cloud-mail` 全程不动。
-> 用户自己上传 GitHub（`GH_REPO` 见 §7），再由助手跑 `deploy.sh` 一键部署。
+> 部署方式（用户 2026-11-08 13:39 改定，旧的“用户自己上传 GitHub”作废）：**由助手登录用户的 GitHub、自己部署新项目**（仓库名 `mail-ultimate`，见 §7）；**先部署当前 1–4 阶段完成的状态，5–6 阶段做完再更新部署**。本文件与 `PHASE5-6.md` 是 5–6 阶段完成后的更新。
 
 ## 0. 部署前检查清单（缺一项都不许部署）
 
-- [ ] 本地测试全过：`mail-worker` 下 `npx vitest run test/phase1.spec.js test/phase2a.spec.js test/phase2c.spec.js`（phase1 23 个、phase2a 13 个、phase2c 26 个，共 62 个）。
+- [ ] 本地测试全过：`mail-worker` 下 `npx vitest run test/phase1.spec.js test/phase2a.spec.js test/phase2c.spec.js test/phase6.spec.js`（phase1 23 个、phase2a 13 个、phase2c 26 个、phase6 30 个，共 92 个）；`smtp-relay` 下 `npm test`（12 个）；`mail-vue` 下 `node test/e2ee.smoke.mjs`（11 个）与 `node test/preferences-locale.smoke.mjs`（10 个）。
 - [ ] 前端构建通过：`mail-vue` 下 `npm run build`（见 §5 说明：本机用 npm，不用 pnpm）。
-- [ ] `PHASE2-4.md` §5 回归清单逐项打勾；已知问题清单为空（零已知 bug 方可交付，用户 2026-11-08 13:07 定）。
+- [ ] `PHASE2-4.md` §5 与 `PHASE5-6.md` §7 回归清单逐项打勾；已知问题清单为空（零已知 bug 方可交付，用户 2026-11-08 13:07 定）。
 - [ ] `jwt_secret` 已重新生成（§3），**绝不复用老站的 jwt_secret**。
+- [ ] `FIELD_ENC_KEY` 已生成并填入 `.deploy.env`（§3，第六阶段字段加密用；**不与 `jwt_secret` 复用**；不填则敏感字段存明文）。
 - [ ] `.deploy.env` 已按 `.deploy.env.example` 填好，且**未提交进 Git**（`.gitignore` 已忽略）。
 - [ ] Cloudflare 账号已登录：`npx wrangler login`（或 `CLOUDFLARE_API_TOKEN` 环境变量，权限需含 Workers/D1/KV/R2/Email/Zone 编辑）。
 - [ ] 域名 aevorynthtech.com 已在该 Cloudflare 账号下托管（DNS 由 CF 接管）。
@@ -48,6 +49,7 @@ npx wrangler r2 bucket create mail-ultimate
 > 用户 2026-11-08 13:21 定：**主通道 Cloudflare Email Sending，Resend 免费版做备用**（配额保护不变）。
 > **不是“免费无限”**：CF Email Sending 发给任意收件人需要 **Workers Paid 计划**——用户已在付 Workers 付费版 $5/月，不用多花钱，**含 3000 封/月，超量 $0.35/1000 封**；免费版只能发给自己验证过的地址，**不能当主通道**。
 > Resend 免费版（**100 封/天、3000 封/月**）继续做备用通道：只有 CF 通道不可用时才走 Resend，撞线即停发并 TG 告警（`email-service.js` 的配额保护）。
+> 另：Cloudflare Email Service 自带 SMTP 提交端点 `smtp.mx.cloudflare.net:465`（仅隐式 TLS；用户名为字面量 `api_token`；密码为带 Email Sending: Edit 权限的 CF API token；不支持 587/465 以外的提交端口）——**这是账号级共享凭证认证，没有按用户区分、没有本站的角色发信次数与 Resend 配额概念，不能替代用户侧 SMTP**。用户侧 SMTP 仍走第五阶段的甲骨文守护进程（`SMTP-DEPLOY.md`）；该端点只作为管理员自用/排障的备选，**不要写进用户配置向导、不要公布给用户**。
 
 **代码里的通道判定（先核对，再按步骤开通）：**
 
@@ -86,7 +88,7 @@ npx wrangler r2 bucket create mail-ultimate
 | Turnstile Site Key / Secret Key | 见 §4，新站点 | 部署后在管理后台设置页填（不进 wrangler 配置） |
 | Resend API Key | 见 §2.2，新域名 token | 部署后在管理后台设置页填 |
 | Telegram Bot Token / Chat ID | 复用现有机器人亦可（告警通道与域名无关）；没有就新建 Bot | 管理后台设置页填 |
-| `FIELD_ENC_KEY` | 第六阶段安全加固才用（敏感字段应用层加密），本阶段**不用填**，先留空 | — |
+| `FIELD_ENC_KEY` | 第六阶段安全加固已实施（敏感字段应用层加密）：**部署时生成**（`openssl rand -hex 32`），填进 `.deploy.env`；**不与 `jwt_secret` 复用**；不填则敏感字段存明文（会打告警日志） | 生成后填 |
 
 > ⚠️ 老站的 `jwt_secret`、Turnstile Secret Key、Resend token、CF API Token 一律不复用；`.deploy.env` 与生成的 `wrangler.deploy.toml` 都已加入 `.gitignore`，**绝不提交进 Git**。
 
@@ -187,6 +189,7 @@ command = "npm --prefix ../mail-vue install --legacy-peer-deps --no-package-lock
    跑完立即核对（`wrangler d1 execute mail-ultimate --remote --command "..."`）：
    - `pragma_table_info(user)` 含 `locale` 列；`pragma_table_info(setting)` 含 `reg_key_alert_threshold`、`reg_circuit_open` 等新列；
    - `login_log` / `alert_log` / `register_log` / `audit_log` / `ip_blocklist` 五表存在；
+   - `user_totp` / `user_passkey` / `user_security` 三表存在（第六阶段）；`pragma_table_info(setting)` 含 `log_retention_days`、`log_ip_mask`；`pragma_table_info(email)` 含 `e2ee`；
    - perm 37–45 存在（37–42 第一阶段，43–45 第二阶段：告警中心父、告警查看、用户导出）。
 2. **管理后台设置**（管理员登录后）：填 Turnstile Site/Secret Key、Resend Key、TG Bot Token/Chat ID；确认注册验证 = OPEN、单 IP 24h 限 3、熔断阈值 20/分钟、密钥告警阈值 500；新建至少一把注册密钥。
 3. **收发信冒烟**：注册一个测试账号（走 Turnstile）→ 登录 → 发一封站内信 → 发一封站外信（走 CF Email）→ 从外部邮箱回一封（走 Email Routing 收信）→ 确认收发都通。**站外信发出前先核对主通道**：管理后台 → 系统设置页，发信服务一栏须显示 **Cloudflare Email Sending**（不是 Resend Token）；若显示 Resend，说明 `email` 绑定没生效，回 §2.2 第 5 步核对 `wrangler.deploy.toml` 里有没有 `name = "email"` 这一节。
@@ -194,17 +197,17 @@ command = "npm --prefix ../mail-vue install --legacy-peer-deps --no-package-lock
 5. **巡检上线**（甲骨文，见 `oracle-patrol/README.md`）：填真实 `config.json`（D1 ID、CF API Token、TG、管理员账号）→ `--once --dry-run` 看拟封禁/WAF 表达式无误 → `--once` 实跑一次 → systemd 启用；Uptime Kuma 建 push 监控；热备机只装不启动。
 6. **WAF 规则**：在 aevorynthtech.com 的 Zone 里建规则 `mail-ultimate-ip-blocklist`（表达式 `http.host eq "aevorynthtech.com" and ip.src in { ... }`，初始为空集或巡检首次同步后自动生成；巡检只改这一条规则，不动其他规则）。
 7. **回滚预案**：任何一步失败，先停新站注册（设置页关注册验证改为 CLOSE 或直接停 Worker 的路由），不要动老站；Worker 可 `wrangler rollback` 回上一版本；D1 有问题时用甲骨文备份恢复（备份同步见 `oracle-patrol/README.md`）；`/init` 幂等，可重跑。
+8. **安全加固与 SMTP 冒烟**（见 `PHASE5-6.md` §7 回归 25–36）：TOTP 开通→登录验证、Passkey 注册→登录、会话踢出、安全中心读写、E2EE 站外拒发/站内解密、安全头、日志清理、IP 脱敏逐项核对；SMTP 守护进程部署后真实联调（`SMTP-DEPLOY.md`）。**注意：公网 587/465 入口待 Spectrum 方案确认（`PHASE5-6.md` §6.1），确认前不要向用户公布 `smtp.aevorynthtech.com`。**
 
 ## 7. GitHub 集成（只留接口）
 
-- 用户自己把 `~/workspace/mail-ultimate/` 上传到自己的 GitHub 仓库（助手不索要账号密码、不代传）。
+- 部署方式（用户 2026-11-08 13:39 改定）：**由助手登录用户的 GitHub、自己部署新项目**（仓库名 `mail-ultimate`；GitHub 账号用户说需要的话可以给，密码类凭证须走安全卡片，绝不明文索要）。先部署当前 1–4 阶段完成的状态，5–6 阶段做完再更新部署。
 - `deploy.sh` 里留了 `GH_REPO` 变量（格式 `用户名/仓库名`），只用于 `wrangler.deploy.toml` 的 `project_link` 展示字段；上传完成后再填，不填也不影响部署。
-- 上传后建议动作（用户自己做）：`git remote add origin https://github.com/<GH_REPO>.git && git push -u origin main`；仓库设为私有；确认 `.deploy.env` / `wrangler.deploy.toml` / `oracle-patrol/config.json` / `state.json` 均未被提交（`.gitignore` 已覆盖）。
+- 上传后建议动作：`git remote add origin https://github.com/<GH_REPO>.git && git push -u origin main`；仓库设为私有；确认 `.deploy.env` / `wrangler.deploy.toml` / `oracle-patrol/config.json` / `state.json` 均未被提交（`.gitignore` 已覆盖）。
 
 ## 8. 不做的事（部署时也不要顺手做）
 
 - 不迁移老站数据（用户、邮件、注册密钥一律不迁，新站从零开始）。
 - 不复用老站任何密钥、Token、D1/KV/R2、Turnstile 站点、WAF 规则。
-- 不在本阶段部署 SMTP 服务（第五阶段实施，方案见 `PHASE2-4.md` §2；部署时只留 `smtp.aevorynthtech.com` 的 DNS 规划，不建记录）。
-- 不部署第六阶段安全加固（TOTP/Passkey/应用层加密，方案见 `PHASE2-4.md` §3，实施另排期）。
+- SMTP 服务与第六阶段安全加固**已实施**（见 `PHASE5-6.md`、`SMTP-DEPLOY.md`），部署时按 §6 第 8 项冒烟核对；**公网 587/465 入口待 Spectrum 方案确认，确认前只留 `smtp.aevorynthtech.com` 的 DNS 规划、不建记录、不向用户公布**。
 - 部署全程不碰 mail.flame.edu.kg 的任何配置；新站出问题不拿老站当试验场。
