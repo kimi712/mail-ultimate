@@ -17,6 +17,15 @@ export function setLocale(locale) {
     return http.post('/my/locale', {locale}, {noMsg: true})
 }
 
+// Phase 7 壁纸：壁纸偏好同步（后端 user.wallpaper / user.wallpaper_tags，v3_10DB）
+export function getWallpaper() {
+    return http.get('/my/wallpaper', {noMsg: true})
+}
+
+export function setWallpaper(wallpaper, wallpaperTags = []) {
+    return http.post('/my/wallpaper', {wallpaper, wallpaperTags}, {noMsg: true})
+}
+
 export function resetPassword(password) {
     return http.put('/my/resetPassword', {password})
 }

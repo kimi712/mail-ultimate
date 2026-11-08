@@ -30,6 +30,17 @@
             />
           </div>
           <div class="search-content">
+            <div v-if="props.scopes.length > 1" class="search-scope">
+              <div class="search-content-title">{{ t('search.scope') }}</div>
+              <div class="custom-style">
+                <el-segmented
+                  :model-value="props.scope"
+                  :options="props.scopes"
+                  :props="{ label: 'label', value: 'value' }"
+                  @change="$emit('update:scope', $event)"
+                />
+              </div>
+            </div>
             <div class="search-content-title">{{ t('searchType') }}</div>
             <div class="custom-style">
               <el-segmented
@@ -78,7 +89,7 @@ import {Icon} from '@iconify/vue'
 import {useI18n} from 'vue-i18n'
 
 const {t} = useI18n()
-const emit = defineEmits(['search', 'reset'])
+const emit = defineEmits(['search', 'reset', 'update:scope'])
 const props = defineProps({
   store: {
     type: Object,
@@ -87,6 +98,15 @@ const props = defineProps({
   searchOptions: {
     type: Array,
     required: true,
+  },
+  // Phase 7：文件夹范围（顶栏全局搜索用）。不传则不显示范围选择，保持原有单文件夹行为。
+  scopes: {
+    type: Array,
+    default: () => [],
+  },
+  scope: {
+    type: String,
+    default: '',
   },
 })
 
@@ -136,6 +156,14 @@ watch(
     }
   },
   {immediate: true}
+)
+
+// Phase 7：顶栏切文件夹范围时 store 随之更换，从新 store 恢复该文件夹已存的搜索条件。
+watch(
+  () => props.store,
+  () => {
+    restoreSavedSearch()
+  }
 )
 
 watch(startDate, value => {
@@ -429,6 +457,10 @@ onBeforeUnmount(() => {
 
 .search-content {
   padding: 20px 15px 0;
+}
+
+.search-scope {
+  margin-bottom: 20px;
 }
 
 .search-content-title {

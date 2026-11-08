@@ -43,7 +43,8 @@ const auditLogService = {
 				targetType,
 				targetId: String(targetId ?? ''),
 				ip: await maybeMaskIp(c, reqUtils.getIp(c)),
-				ua: c.req.header('user-agent') || '',
+				// Phase 7：UA 只用于人工识别操作者设备，截断到 500 字符。
+				ua: (c.req.header('user-agent') || '').slice(0, 500),
 				detail: detailStr
 			}).run();
 		} catch (e) {

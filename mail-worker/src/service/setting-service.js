@@ -14,7 +14,7 @@ import auditLogService from './audit-log-service';
 import fieldCrypto from '../utils/field-crypto';
 
 // Phase 6：应用层加密字段（契约 §1.5）。resendTokens 是整段 JSON 字符串，单独处理。
-const ENCRYPTED_SETTING_FIELDS = ['secretKey', 'tgBotToken', 's3SecretKey', 's3AccessKey', 'githubClientSecret', 'googleClientSecret', 'linuxdoClientSecret'];
+const ENCRYPTED_SETTING_FIELDS = ['secretKey', 'tgBotToken', 's3SecretKey', 's3AccessKey', 'githubClientSecret', 'googleClientSecret', 'linuxdoClientSecret', 'webhookSecret'];
 
 const settingService = {
 
@@ -255,6 +255,7 @@ const settingService = {
 			noticeOffset: settingRow.noticeOffset,
 			notice: settingRow.notice,
 			loginDomain: settingRow.loginDomain,
+			aiEnabled: settingRow.aiEnabled ?? 1,
 			linuxdoClientId: settingRow.linuxdoClientId,
 			linuxdoSwitch: settingRow.linuxdoSwitch,
 			githubClientId: settingRow.githubClientId,

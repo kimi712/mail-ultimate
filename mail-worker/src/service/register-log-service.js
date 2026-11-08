@@ -23,10 +23,12 @@ async function maybeMaskIp(c, ip) {
 // 窗口统计一律用 SQLite datetime('now', ...) 比较，不混本地时区。
 const registerLogService = {
 
+	// Phase 7：UA 只用于人工识别设备，截断到 500 字符（与 login_log 一致），
+	// 不把超长指纹串完整存库。
 	async record(c, { ip = '', ipSegment = '', email = '', regKeyCode = '', result = registerLogConst.result.SUCCESS, failReason = '', verifyMode = 0, ua = '' }) {
 		try {
 			await orm(c).insert(registerLog).values({
-				ip: await maybeMaskIp(c, ip), ipSegment, email, regKeyCode, result, failReason, verifyMode, ua
+				ip: await maybeMaskIp(c, ip), ipSegment, email, regKeyCode, result, failReason, verifyMode, ua: String(ua || '').slice(0, 500)
 			}).run();
 		} catch (e) {
 			console.error('写注册日志失败:', e.message);

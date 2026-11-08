@@ -52,3 +52,18 @@ export function revokeSession(digest) {
 export function revokeOtherSessions() {
 	return http.post('/my/sessions/revoke', {allExceptCurrent: true}, {noMsg: true});
 }
+
+// Phase 7：安全中心专用登录历史（时间/IP/设备/浏览器/是否新 IP/地点恒为空）。
+export function loginHistory(params) {
+	return http.get('/security/login-history', {params, noMsg: true});
+}
+
+// Phase 7：闲置锁定后解锁，只校验登录密码，不产生新会话。
+export function unlock(password) {
+	return http.post('/security/unlock', {password}, {noMsg: true});
+}
+
+// Phase 7：导出我的数据（JSON，不含邮件正文与任何密钥材料）。
+export function exportData() {
+	return http.get('/my/export', {noMsg: true});
+}

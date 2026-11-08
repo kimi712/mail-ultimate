@@ -653,7 +653,7 @@ describe('个性化安全中心', () => {
 		const user = await makeUser('p6-security@example.com');
 		const before = await api('/my/security', { token: user.token });
 		expect(before.json.code).toBe(200);
-		expect(before.json.data).toEqual({ loginAlert: 1, e2eeEnabled: 0, retentionDays: 0, e2eeSalt: '', totpEnabled: false });
+		expect(before.json.data).toEqual({ loginAlert: 1, e2eeEnabled: 0, retentionDays: 0, e2eeSalt: '', totpEnabled: false, autoLockMinutes: 0 });
 		const set = await api('/my/security', { method: 'POST', token: user.token, body: { loginAlert: 0, retentionDays: 90, e2eeSalt: 'testsalt123' } });
 		expect(set.json.code).toBe(200);
 		const after = await api('/my/security', { token: user.token });

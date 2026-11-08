@@ -1,5 +1,5 @@
 <template>
-  <el-container class="layout">
+  <el-container class="layout" :class="{ 'has-wallpaper': hasWallpaper }">
     <el-aside
         class="aside"
         :class="uiStore.asideShow ? 'aside-show' : 'el-aside-hide'">
@@ -19,15 +19,21 @@
     </el-container>
   </el-container>
   <writer ref="writerRef" />
+  <AutoLock />
 </template>
 
 <script setup>
 import Aside from '@/layout/aside/index.vue'
 import Header from '@/layout/header/index.vue'
 import Main from '@/layout/main/index.vue'
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import AutoLock from '@/components/auto-lock/index.vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import {useUiStore} from "@/store/ui.js";
 import writer from '@/layout/write/index.vue'
+import { currentWallpaper } from '@/utils/wallpaper.js'
+
+// Phase 7 壁纸：有壁纸时布局面板半透明 + 毛玻璃，透出底层壁纸（规则在 style.css）。
+const hasWallpaper = computed(() => !!currentWallpaper.value.url)
 
 const uiStore = useUiStore();
 const writerRef = ref({})

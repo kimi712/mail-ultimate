@@ -80,6 +80,8 @@ const en = {
 	passkeyChallengeExpired: 'Passkey challenge expired, please try again',
 	sessionNotFound: 'Session not found',
 	securityInvalidRetention: 'Retention must be 0, 30, 90 or 365 days',
+	securityInvalidAutoLock: 'Auto-lock must be never, 5, 15 or 30 minutes',
+	securityUnlockLocked: 'Too many failed unlock attempts, try again in 5 minutes',
 	e2eeExternalBlocked: 'End-to-end encryption is enabled; cannot send to external addresses',
 	exportTooManyRows: 'Too many rows to export (over 5000), please narrow the filter and try again',
 	newIpLoginSubject: 'New sign-in alert',

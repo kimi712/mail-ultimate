@@ -1,5 +1,6 @@
 <template>
   <div id="login-box" :style=" background ? 'background: var(--el-bg-color)' : ''" v-loading="oauthLoading" element-loading-text="登录中...">
+    <IntroAnimation />
     <div class="locale-switcher">
       <el-dropdown trigger="click" @command="onSwitchLocale">
         <span class="locale-btn">
@@ -209,14 +210,16 @@ import {useUserStore} from "@/store/user.js";
 import {useUiStore} from "@/store/ui.js";
 import {Icon} from "@iconify/vue";
 import {cvtR2Url} from "@/utils/convert.js";
-import {loginUserInfo, getLocale, setLocale} from "@/request/my.js";
+import {loginUserInfo, getLocale, setLocale, getWallpaper, setWallpaper} from "@/request/my.js";
 import i18n from "@/i18n/index.js";
 import { SUPPORTED_LOCALES, applyLocale, syncLocaleWithServer } from "@/i18n/locale.js";
+import { syncWallpaperWithServer } from "@/utils/wallpaper.js";
 import { loadPrefs } from "@/utils/preferences.js";
 import {permsToRouter} from "@/perm/perm.js";
 import {useI18n} from "vue-i18n";
 import {oauthLinuxDoLogin, oauthGithubLogin, oauthGoogleLogin} from "@/request/ouath.js";
 import {reloadTurnstileScript} from "@/utils/turnstile-script.js";
+import IntroAnimation from "@/components/intro-animation/index.vue";
 
 const {t} = useI18n();
 
@@ -654,6 +657,8 @@ async function saveToken(token) {
   // Phase 2 A 路补充：登录成功后同步语言偏好——后端有值则以其为准回写本地，
   // 后端为空则把本地 mail-locale 写到后端（best-effort，不阻断登录）。
   await syncLocaleWithServer({ i18n, settingStore, getLocale, setLocale });
+  // Phase 7 壁纸：登录成功后同步壁纸偏好（同款机制）。
+  await syncWallpaperWithServer({ getWallpaper, setWallpaper, isDark: uiStore.dark });
   accountStore.currentAccountId = user.account.accountId;
   accountStore.currentAccount = user.account;
   userStore.user = user;

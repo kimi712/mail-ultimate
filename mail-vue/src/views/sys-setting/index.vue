@@ -396,6 +396,14 @@
                              v-model="setting.aiCode"/>
                 </div>
               </div>
+              <!-- Phase 7：AI 写信/回信/摘要总开关（ai_enabled：1 开 / 0 关，与 aiCode 的 0 开 / 1 关相反） -->
+              <div class="setting-item">
+                <div><span>{{ $t('aiAssistant') }}</span></div>
+                <div>
+                  <el-switch @change="changeField('aiEnabled', $event)" :before-change="beforeChange" :active-value="1" :inactive-value="0"
+                             v-model="setting.aiEnabled"/>
+                </div>
+              </div>
               <div class="setting-item">
                 <div><span>{{ $t('codeRecognitionRules') }}</span></div>
                 <div class="forward">
@@ -404,6 +412,14 @@
                   </el-button>
                 </div>
               </div>
+            </div>
+          </div>
+
+          <!-- Wallpaper Card -->
+          <div class="settings-card" id="wallpaper">
+            <div class="card-title">{{ $t('wallpaper.title') }}</div>
+            <div class="card-content">
+              <WallpaperSelector/>
             </div>
           </div>
 
@@ -923,6 +939,7 @@ import {storeToRefs} from "pinia";
 import {debounce} from 'lodash-es'
 import {isDomain, isEmail, isIpUrl} from "@/utils/verify-utils.js";
 import loading from "@/components/loading/index.vue";
+import WallpaperSelector from "@/components/wallpaper-selector/index.vue";
 import {getTextWidth} from "@/utils/text.js";
 import {fileToBase64} from "@/utils/file-utils.js"
 import {useI18n} from 'vue-i18n';

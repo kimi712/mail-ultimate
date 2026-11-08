@@ -36,6 +36,9 @@ const dbInit = {
 		await this.v3_5DB(c);
 		await this.v3_6DB(c);
 		await this.v3_7DB(c);
+		await this.v3_8DB(c);
+		await this.v3_9DB(c);
+		await this.v3_10DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
 	},
@@ -254,6 +257,53 @@ const dbInit = {
 			`ALTER TABLE setting ADD COLUMN log_retention_days INTEGER NOT NULL DEFAULT 90;`,
 			`ALTER TABLE setting ADD COLUMN log_ip_mask INTEGER NOT NULL DEFAULT 0;`,
 			`ALTER TABLE email ADD COLUMN e2ee INTEGER NOT NULL DEFAULT 0;`
+		];
+		for (const sql of COLUMN_SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		}
+	},
+
+	async v3_8DB(c) {
+		// Phase 7：user_security 新列 auto_lock_minutes（闲置自动锁定，默认 0=从不）；
+		// 日志 IP 脱敏默认开启：把现存 setting.log_ip_mask=0 改为 1（该开关无前端入口，
+		// 无人能主动设为 0；写入脱敏只影响 ip 列，ip_segment 与限额/封禁不受影响）。
+		// 逐条独立 try/catch + console.warn，幂等。
+		try {
+			await c.env.db.prepare(`ALTER TABLE user_security ADD COLUMN auto_lock_minutes INTEGER NOT NULL DEFAULT 0;`).run();
+		} catch (e) {
+			console.warn(`跳过字段：${e.message}`);
+		}
+		try {
+			await c.env.db.prepare(`UPDATE setting SET log_ip_mask = 1 WHERE log_ip_mask = 0;`).run();
+		} catch (e) {
+			console.warn(`跳过脱敏默认开启：${e.message}`);
+		}
+	},
+
+	async v3_9DB(c) {
+		// Phase 7（AI 后端）：setting 新列 ai_enabled（直白布尔语义：1 = 开启
+		// （默认），0 = 关闭；注意与站内多数 0=OPEN / 1=CLOSE 的反向开关不同）。
+		// 逐条独立 try/catch + console.warn，幂等。
+		try {
+			await c.env.db.prepare(`ALTER TABLE setting ADD COLUMN ai_enabled INTEGER NOT NULL DEFAULT 1;`).run();
+		} catch (e) {
+			console.warn(`跳过字段：${e.message}`);
+		}
+	},
+
+	async v3_10DB(c) {
+		// Phase 7（壁纸系统）：user 新列 wallpaper / wallpaper_tags。
+		// wallpaper：当前壁纸值——预置为清单 id（如 snowden-vista），
+		// 自定义上传为 /oss/wallpapers/{userId}/{时间戳}.{ext}；空 = 默认 snowden-vista。
+		// wallpaper_tags：用户点的喜好标签，逗号分隔（如 隐私,电影感），供“为你推荐”匹配。
+		// 逐条独立 try/catch + console.warn，幂等。
+		const COLUMN_SQL_LIST = [
+			`ALTER TABLE user ADD COLUMN wallpaper TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE user ADD COLUMN wallpaper_tags TEXT NOT NULL DEFAULT '';`
 		];
 		for (const sql of COLUMN_SQL_LIST) {
 			try {

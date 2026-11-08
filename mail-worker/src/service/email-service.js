@@ -489,9 +489,9 @@ const emailService = {
 		}
 
 		// 全部站内收件人走本地投递；存在站外收件人时优先 CF，其次 Resend。
-		// 注意：CF 已配时现有逻辑永远走 CF、Resend 根本不用；“撞线切 CF”在本实现里
-		// 体现为——Resend 是无 CF 时的唯一外发通道，撞线即停发并告警（见下），
-		// 一旦配了 CF，useCloudflareEmail 分支天然优先。渠道优先级未改。
+		// Phase 7 发信容灾：配了 CF 时先走 CF，CF 某组抛错才切 Resend 单发该组
+		// （sendCloudflare → tryResendFallback；无 Key/配额不够/回落失败时
+		// 返回原始 CF 错误）。无 CF 时 Resend 是唯一外发通道，撞线即停发并告警。
 		let deliveries;
 		if (allInternal) {
 			deliveries = this.sendInternal(c, context);
@@ -548,7 +548,9 @@ const emailService = {
 	},
 
 	// CF 发送：普通发送一次提交所有收件人，分开发送逐人调用并保存结果。
-	async *sendCloudflare(c, { separate, sendParams, saveParams }) {
+	// Phase 7 发信容灾：某组 CF 抛错时自动切 Resend 单发该组收件人（见 tryResendFallback）；
+	// CF 成功的组绝不重发；回落失败/无 Key/配额不够时返回原始 CF 错误。
+	async *sendCloudflare(c, { separate, sendParams, saveParams, resendToken }) {
 		const recipientGroups = separate
 			? sendParams.receiveEmail.map(address => [address])
 			: [sendParams.receiveEmail];
@@ -557,15 +559,82 @@ const emailService = {
 			try {
 				result = await this.sendByCloudflareEmail(c, { ...sendParams, receiveEmail });
 			} catch (error) {
-				if (!separate) throw error;
+				const fallback = await this.tryResendFallback(c, { cfError: error, receiveEmail, sendParams, saveParams, resendToken });
+				if (fallback.ok) {
+					yield { emails: [fallback.emailResult] };
+					continue;
+				}
+				if (!separate) throw fallback.error;
 				// 分开发送遇到渠道错误即停止，已成功的记录由入口汇总。
-				yield { error: { message: error.message } };
+				yield { error: { message: fallback.error.message } };
 				return;
 			}
 			const emailResult = await this.saveSentEmail(c, {
 				...saveParams, receiveEmail, providerId: result.data.id
 			});
 			yield { emails: [emailResult] };
+		}
+	},
+
+	// Phase 7 发信容灾：CF 失败后的 Resend 回落（只发本组收件人）。
+	// 切流条件：已配 Resend Key 且 Resend 日/月配额够。任一不满足、或回落本身失败，
+	// 都返回原始 CF 错误（不掩盖、不写发送记录）；回落成功才按 Resend 记 SENT + Resend id
+	// 并计配额。每次实际回落尝试（成功/失败）都记日志/告警（见 logSendFailover）。
+	async tryResendFallback(c, { cfError, receiveEmail, sendParams, saveParams, resendToken }) {
+		if (!resendToken) {
+			return { ok: false, error: cfError };
+		}
+		let hasBudget = false;
+		try {
+			hasBudget = await quotaService.hasResendBudget(c);
+		} catch (e) {
+			console.error('回落前查 Resend 配额失败，不切 Resend:', e.message);
+		}
+		if (!hasBudget) {
+			return { ok: false, error: cfError };
+		}
+		let result;
+		try {
+			// 单发（不用 sendResend 的批量接口）：回落只针对失败的这一组收件人，
+			// 且批量接口不支持附件，单发无此限制。
+			result = await this.sendByResend(resendToken, { ...sendParams, receiveEmail });
+		} catch (fallbackError) {
+			await this.logSendFailover(c, { receiveEmail, sendParams, cfError, fallbackError });
+			return { ok: false, error: cfError };
+		}
+		if (result?.error) {
+			await this.logSendFailover(c, { receiveEmail, sendParams, cfError, fallbackError: new Error(result.error.message || 'Resend error') });
+			return { ok: false, error: cfError };
+		}
+		// 回落成功：按 Resend 渠道记 SENT（useCloudflareEmail=false），providerId 为 Resend id。
+		const emailResult = await this.saveSentEmail(c, {
+			...saveParams, receiveEmail, providerId: result.data?.id, useCloudflareEmail: false
+		});
+		await quotaService.recordResendSent(c, receiveEmail.length);
+		await this.logSendFailover(c, { receiveEmail, sendParams, cfError, providerId: result.data?.id });
+		return { ok: true, emailResult };
+	},
+
+	// 回落日志/告警：复用 telegramService.sendAlert（先写 alert_log 再发 TG，永不抛错；
+	// 无 TG 配置时只记库不发 TG）。成功与失败的回落尝试都记一条，
+	// 文本只含发件人/收件人/错误摘要，不含正文。
+	async logSendFailover(c, { receiveEmail, sendParams, cfError, fallbackError, providerId }) {
+		try {
+			const lines = [
+				'🔁 发信回落 CF→Resend',
+				`发件人：${sendParams?.accountEmail || ''}`,
+				`收件人：${receiveEmail.join(', ')}`,
+				`CF 失败：${cfError?.message || cfError}`
+			];
+			if (providerId) {
+				lines.push(`Resend 已发出（id ${providerId}）`);
+			}
+			if (fallbackError) {
+				lines.push(`Resend 回落也失败：${fallbackError.message || fallbackError}，已返回 CF 原始错误`);
+			}
+			await telegramService.sendAlert(c, lines.join('\n'), 'failover');
+		} catch (e) {
+			console.error('记发信回落日志失败:', e.message);
 		}
 	},
 

@@ -59,6 +59,52 @@ app.post('/my/locale', async (c) => {
 	return c.json(result.ok());
 });
 
+// Phase 7 壁纸：壁纸偏好同步（后端 user.wallpaper / user.wallpaper_tags，v3_10DB 加列）。
+// 仅限本人数据；wallpaper 为预置清单 id（如 snowden-vista）或自定义上传 URL
+// （/oss/wallpapers/{userId}/{时间戳}.{ext}），空 = 默认 snowden-vista；
+// wallpaperTags 为喜好标签数组（最多 10 个，每项 ≤20 字），逗号分隔存库。
+const WALLPAPER_ID_RE = /^[A-Za-z0-9][A-Za-z0-9_-]*$/;
+const WALLPAPER_CUSTOM_RE = /^\/oss\/wallpapers\/\d+\/\d+\.(jpg|png|webp)$/;
+
+function normalizeWallpaperTags(tags) {
+	if (!Array.isArray(tags)) {
+		throw new BizError('Invalid wallpaperTags', 400);
+	}
+	if (tags.length > 10) {
+		throw new BizError('Invalid wallpaperTags', 400);
+	}
+	return tags.map((tag) => String(tag).trim()).filter((tag) => {
+		if (!tag || tag.length > 20 || tag.includes(',')) {
+			throw new BizError('Invalid wallpaperTags', 400);
+		}
+		return true;
+	});
+}
+
+app.get('/my/wallpaper', async (c) => {
+	const userId = c.get('user').userId;
+	const row = await orm(c).select({ wallpaper: user.wallpaper, wallpaperTags: user.wallpaperTags }).from(user)
+		.where(eq(user.userId, userId)).get();
+	return c.json(result.ok({
+		wallpaper: row?.wallpaper || '',
+		wallpaperTags: row?.wallpaperTags ? row.wallpaperTags.split(',').filter(Boolean) : []
+	}));
+});
+
+app.post('/my/wallpaper', async (c) => {
+	const body = await c.req.json().catch(() => ({}));
+	const { wallpaper = '', wallpaperTags = [] } = body;
+	if (typeof wallpaper !== 'string' || wallpaper.length > 512
+		|| (wallpaper !== '' && !WALLPAPER_ID_RE.test(wallpaper) && !WALLPAPER_CUSTOM_RE.test(wallpaper))) {
+		throw new BizError('Invalid wallpaper', 400);
+	}
+	const tags = normalizeWallpaperTags(wallpaperTags);
+	const userId = c.get('user').userId;
+	await orm(c).update(user).set({ wallpaper, wallpaperTags: tags.join(',') })
+		.where(eq(user.userId, userId)).run();
+	return c.json(result.ok());
+});
+
 app.put('/my/resetPassword', async (c) => {
 	await userService.resetPassword(c, await c.req.json(), userContext.getUserId(c));
 	return c.json(result.ok());

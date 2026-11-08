@@ -13,7 +13,11 @@ const KvConst = {
 	// Phase 6：Passkey challenge（value: challenge 字符串，TTL 300 秒）
 	PASSKEY_CHALLENGE: 'passkey_challenge:',
 	// Phase 6：会话元数据（value: {digest: {ua, ip, createdAt}}，与 AUTH_INFO 同 TTL）
-	SESSION_META: 'session_meta:'
+	SESSION_META: 'session_meta:',
+	// Phase 7：闲置解锁连续失败计数（value: 数字，TTL 300 秒；5 次后锁 5 分钟）
+	UNLOCK_FAIL: 'unlock_fail:',
+	// Phase 7：AI 每用户每天调用计数（value: 数字，key 含 userId 与日期，TTL 48 小时；上限 50）
+	AI_DAY: 'ai_day:'
 }
 
 export default KvConst;

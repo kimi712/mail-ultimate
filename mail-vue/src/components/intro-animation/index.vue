@@ -1,0 +1,298 @@
+<template>
+  <!-- 产品自己的开场动画（不是广告位，无任何推广/外部内容）。
+       全屏覆盖在登录页之上；登录表单在遮罩下正常挂载加载，不被阻塞。 -->
+  <transition name="intro-fade" @after-leave="onAfterLeave">
+    <div v-if="visible" class="intro-overlay" role="dialog" :aria-label="$t('intro.skip')" @click.self="dismiss(false)">
+      <div class="intro-vista" aria-hidden="true"></div>
+      <div class="intro-shade" aria-hidden="true"></div>
+
+      <button class="intro-skip" type="button" @click="dismiss(false)">{{ $t('intro.skip') }}</button>
+
+      <div class="intro-center">
+        <span class="intro-badge" aria-hidden="true">
+          <svg width="54" height="54" viewBox="0 0 36 36" fill="none">
+            <defs>
+              <linearGradient id="introBrandGrad" x1="0" y1="0" x2="36" y2="36" gradientUnits="userSpaceOnUse">
+                <stop stop-color="#2563eb" />
+                <stop offset="1" stop-color="#7c3aed" />
+              </linearGradient>
+            </defs>
+            <rect width="36" height="36" rx="10" fill="url(#introBrandGrad)" />
+            <rect x="8" y="11" width="20" height="14" rx="2" stroke="#fff" stroke-width="1.8" />
+            <path d="M9 13l9 6 9-6" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
+          </svg>
+        </span>
+        <h1 class="intro-brand"><span class="intro-brand-text">{{ brandTitle }}</span></h1>
+      </div>
+
+      <div class="intro-quote-wrap">
+        <transition name="quote-fade" mode="out-in">
+          <figure class="intro-quote" :key="quoteIndex">
+            <blockquote class="intro-quote-en">“{{ QUOTES[quoteIndex].en }}”</blockquote>
+            <figcaption class="intro-quote-sub">{{ $t(QUOTES[quoteIndex].key) }}</figcaption>
+            <figcaption class="intro-quote-by">— Edward Snowden</figcaption>
+          </figure>
+        </transition>
+      </div>
+
+      <label class="intro-nomore">
+        <input type="checkbox" v-model="doNotShowAgain" />
+        <span>{{ $t('intro.doNotShowAgain') }}</span>
+      </label>
+    </div>
+  </transition>
+</template>
+
+<script setup>
+import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { useSettingStore } from '@/store/setting.js'
+
+// 斯诺登名言：只用 PHASE7-NOTES.md 里核实过的三句英文原文，全文照用，不编新的。
+// 英文原文固定不变；各语种小字翻译走 i18n intro.quote1/2/3。
+const QUOTES = [
+  {
+    key: 'intro.quote1',
+    en: 'Arguing that you don\'t care about the right to privacy because you have nothing to hide is no different than saying you don\'t care about free speech because you have nothing to say.',
+  },
+  {
+    key: 'intro.quote2',
+    en: 'Privacy isn\'t about something to hide. Privacy is about something to protect.',
+  },
+  {
+    key: 'intro.quote3',
+    en: 'Under observation, we act less free, which means we effectively are less free.',
+  },
+]
+
+const DISMISSED_KEY = 'mail-intro-dismissed'
+// 每句名言 5 秒，三句共 15 秒；总时长 16 秒，留 1 秒给品牌字标收尾；可跳过。
+const AUTO_DISMISS_MS = 16000
+const QUOTE_INTERVAL_MS = 5000
+
+const settingStore = useSettingStore()
+// 品牌字标：与登录页同一来源（后端网站配置 title），不自创新名字；
+// 配置未加载完成前先用 Mail 占位，配置到达后自动更新。
+const brandTitle = computed(() => settingStore.settings?.title || 'Mail')
+
+let dismissed = false
+try {
+  dismissed = localStorage.getItem(DISMISSED_KEY) === '1'
+} catch (e) { /* 无痕/禁用存储时照常显示一次 */ }
+
+const visible = ref(!dismissed)
+const doNotShowAgain = ref(false)
+const quoteIndex = ref(0)
+
+let rotateTimer = null
+let dismissTimer = null
+
+function dismiss(persist) {
+  if (!visible.value) return
+  if (persist || doNotShowAgain.value) {
+    try {
+      localStorage.setItem(DISMISSED_KEY, '1')
+    } catch (e) { /* 存储失败不影响本次跳过 */ }
+  }
+  visible.value = false
+}
+
+function onAfterLeave() {
+  stopTimers()
+}
+
+function onKeydown(e) {
+  if (e.key === 'Escape') dismiss(false)
+}
+
+function stopTimers() {
+  if (rotateTimer) { clearInterval(rotateTimer); rotateTimer = null }
+  if (dismissTimer) { clearTimeout(dismissTimer); dismissTimer = null }
+}
+
+onMounted(() => {
+  if (!visible.value) return
+  rotateTimer = setInterval(() => {
+    quoteIndex.value = (quoteIndex.value + 1) % QUOTES.length
+  }, QUOTE_INTERVAL_MS)
+  dismissTimer = setTimeout(() => dismiss(false), AUTO_DISMISS_MS)
+  window.addEventListener('keydown', onKeydown)
+})
+
+onUnmounted(() => {
+  stopTimers()
+  window.removeEventListener('keydown', onKeydown)
+})
+</script>
+
+<style scoped>
+/* 纯 CSS 动效：无视频、无重型库、无新增依赖。 */
+.intro-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  overflow: hidden;
+  background: #0b1020;
+  color: #fff;
+  font-family: inherit;
+  cursor: default;
+}
+
+.intro-vista {
+  position: absolute;
+  inset: -4%;
+  background: url('/wallpapers/snowden-vista.jpg') center / cover no-repeat;
+  /* 默认壁纸：缓慢缩放 + 平移的电影感运镜，8 秒走完一个镜头 */
+  animation: intro-kenburns 8s ease-out both;
+}
+
+.intro-shade {
+  position: absolute;
+  inset: 0;
+  background:
+    linear-gradient(180deg, rgba(5, 8, 20, 0.25) 0%, rgba(5, 8, 20, 0.05) 40%, rgba(5, 8, 20, 0.78) 100%);
+}
+
+@keyframes intro-kenburns {
+  from { transform: scale(1.02) translate(0, 0); }
+  to { transform: scale(1.12) translate(-1.2%, -1.5%); }
+}
+
+.intro-skip {
+  position: absolute;
+  top: 20px;
+  right: 24px;
+  padding: 8px 18px;
+  border: 1px solid rgba(255, 255, 255, 0.45);
+  border-radius: 999px;
+  background: rgba(10, 14, 30, 0.35);
+  color: rgba(255, 255, 255, 0.92);
+  font-size: 14px;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  backdrop-filter: blur(4px);
+  transition: background 0.3s, border-color 0.3s;
+}
+.intro-skip:hover {
+  background: rgba(255, 255, 255, 0.18);
+  border-color: rgba(255, 255, 255, 0.8);
+}
+
+.intro-center {
+  position: absolute;
+  left: 50%;
+  top: 34%;
+  transform: translate(-50%, -50%);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 18px;
+  text-align: center;
+}
+
+.intro-badge {
+  display: block;
+  filter: drop-shadow(0 6px 24px rgba(37, 99, 235, 0.55));
+  animation: intro-rise 0.9s ease-out 0.7s both;
+}
+.intro-badge svg { display: block; }
+
+.intro-brand {
+  margin: 0;
+  font-size: clamp(34px, 6vw, 56px);
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  line-height: 1.15;
+  text-shadow: 0 2px 28px rgba(0, 0, 0, 0.6);
+  animation: intro-rise 0.9s ease-out 0.9s both;
+}
+
+.intro-brand-text {
+  background: linear-gradient(100deg, #fff 40%, #c7d2fe 50%, #fff 60%);
+  background-size: 220% 100%;
+  background-position: 120% 0;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  /* 品牌字标呈现后，一道光效从左至右扫过 */
+  animation: intro-shine 1.6s ease-in-out 2.1s both;
+}
+
+@keyframes intro-rise {
+  from { opacity: 0; transform: translateY(16px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@keyframes intro-shine {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+
+.intro-quote-wrap {
+  position: absolute;
+  left: 50%;
+  bottom: 12%;
+  transform: translateX(-50%);
+  width: min(860px, 88vw);
+  text-align: center;
+  animation: intro-rise 0.9s ease-out 1.4s both;
+}
+
+.intro-quote { margin: 0; }
+
+.intro-quote-en {
+  margin: 0 0 12px;
+  font-family: Georgia, 'Times New Roman', serif;
+  font-size: clamp(16px, 2.4vw, 22px);
+  font-style: italic;
+  line-height: 1.65;
+  color: rgba(255, 255, 255, 0.95);
+  text-shadow: 0 1px 12px rgba(0, 0, 0, 0.7);
+}
+
+.intro-quote-sub {
+  font-size: 13px;
+  line-height: 1.6;
+  color: rgba(255, 255, 255, 0.72);
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7);
+}
+
+.intro-quote-by {
+  margin-top: 8px;
+  font-size: 12px;
+  letter-spacing: 0.14em;
+  color: rgba(255, 255, 255, 0.55);
+}
+
+.intro-nomore {
+  position: absolute;
+  right: 24px;
+  bottom: 20px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  color: rgba(255, 255, 255, 0.75);
+  cursor: pointer;
+  user-select: none;
+  text-shadow: 0 1px 8px rgba(0, 0, 0, 0.7);
+}
+.intro-nomore input {
+  accent-color: #6366f1;
+  cursor: pointer;
+}
+
+/* 名言淡入淡出轮换 */
+.quote-fade-enter-active, .quote-fade-leave-active { transition: opacity 0.6s ease; }
+.quote-fade-enter-from, .quote-fade-leave-to { opacity: 0; }
+
+/* 整层淡入淡出（出现 0.6 秒，消失 0.5 秒） */
+.intro-fade-enter-active { transition: opacity 0.6s ease; }
+.intro-fade-leave-active { transition: opacity 0.5s ease; }
+.intro-fade-enter-from, .intro-fade-leave-to { opacity: 0; }
+
+@media (prefers-reduced-motion: reduce) {
+  .intro-vista, .intro-badge, .intro-brand, .intro-brand-text, .intro-quote-wrap {
+    animation: none !important;
+  }
+}
+</style>

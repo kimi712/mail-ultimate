@@ -240,3 +240,54 @@ html[data-density="compact"] .email-row.all-email {
         height: 100px !important;
     }
 }
+
+/* Phase 7 壁纸：全站背景层（登录页与邮箱共用，默认斯诺登远景）。
+   背景图由 utils/wallpaper.js 写进 --wallpaper-url；浅色加一层淡白遮罩、
+   深色加一层半透明黑遮罩（额外压暗）保证文字可读。
+   z-index: -1：贴在 body 背景之上、#app 内容之下，只在内容透明处透出，
+   登录表单卡片本身保持不透明，不会被盖住。 */
+html[data-wallpaper="1"] body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    z-index: -1;
+    background-image: linear-gradient(rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.22)), var(--wallpaper-url);
+    background-size: cover;
+    background-position: center;
+    background-repeat: no-repeat;
+    pointer-events: none;
+}
+
+html.dark[data-wallpaper="1"] body::before {
+    background-image: linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.55)), var(--wallpaper-url);
+}
+
+/* 登录页：去掉不透明渐变底与动画云朵，透出壁纸 */
+html[data-wallpaper="1"] #login-box {
+    background: transparent;
+}
+
+html[data-wallpaper="1"] #background-wrap {
+    display: none;
+}
+
+/* 邮箱布局：主区与顶栏半透明 + 毛玻璃，透出壁纸 */
+html[data-wallpaper="1"] .layout.has-wallpaper .main-container {
+    background: rgba(255, 255, 255, 0.8);
+    backdrop-filter: blur(14px) saturate(1.2);
+    -webkit-backdrop-filter: blur(14px) saturate(1.2);
+}
+
+html[data-wallpaper="1"] .layout.has-wallpaper .el-header {
+    background: rgba(255, 255, 255, 0.72);
+    backdrop-filter: blur(14px) saturate(1.2);
+    -webkit-backdrop-filter: blur(14px) saturate(1.2);
+}
+
+html.dark[data-wallpaper="1"] .layout.has-wallpaper .main-container {
+    background: rgba(10, 10, 14, 0.66);
+}
+
+html.dark[data-wallpaper="1"] .layout.has-wallpaper .el-header {
+    background: rgba(10, 10, 14, 0.6);
+}

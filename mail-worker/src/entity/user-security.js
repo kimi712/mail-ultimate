@@ -9,6 +9,8 @@ export const userSecurity = sqliteTable('user_security', {
 	e2eeEnabled: integer('e2ee_enabled').notNull().default(0),
 	retentionDays: integer('retention_days').notNull().default(0),
 	e2eeSalt: text('e2ee_salt').notNull().default(''),
+	// Phase 7：闲置自动锁定分钟数（0=从不，5/15/30）。
+	autoLockMinutes: integer('auto_lock_minutes').notNull().default(0),
 	createdTime: text('created_time').notNull().default(sql`CURRENT_TIMESTAMP`)
 });
 export default userSecurity

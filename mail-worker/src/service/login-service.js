@@ -419,6 +419,10 @@ const loginService = {
 
 		let authInfo = await c.env.kv.get(KvConst.AUTH_INFO + userRow.userId, { type: 'json' });
 
+		// Phase 7：KV 里不再存密码 hash 与 salt。authInfo.user 只供鉴权中间件
+		// 取 userId/email（见 security.js），hash/salt 落 KV 等于把凭证材料
+		// 放在 D1 之外的第二个存储里；旧 KV 条目在用户下次登录时被覆盖。
+		const { password: _pwd, salt: _salt, ...safeUser } = userRow;
 		if (authInfo && (authInfo.user.email === userRow.email)) {
 
 			if (authInfo.tokens.length > 10) {
@@ -431,13 +435,17 @@ const loginService = {
 
 			authInfo = {
 				tokens: [],
-				user: userRow,
+				user: safeUser,
 				refreshTime: dayjs().toISOString()
 			};
 
 			authInfo.tokens.push(uuid);
 
 		}
+
+		// Phase 7：旧 KV 条目里的 user 仍可能含密码 hash/salt，每次登录都用
+		// 本次的 safeUser 覆盖，确保重登录后 KV 里不再有凭证材料。
+		authInfo.user = safeUser;
 
 		// Phase 2 A 路：updateUserInfo 会覆盖 activeIp，先取上次登录 IP 与本次 IP。
 		// curIp 为 'Unknown'（无 CF-Connecting-IP）时无法判定为新 IP，不标新、不发提醒，避免误报。

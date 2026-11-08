@@ -177,7 +177,9 @@ describe('注册门禁（A 路）', () => {
 			`SELECT result, ip, ip_segment FROM register_log WHERE email = 'ok1@example.com' ORDER BY log_id DESC LIMIT 1`
 		).first();
 		expect(row.result).toBe(0);
-		expect(row.ip).toBe(TEST_IP_OK);
+		// Phase 7：log_ip_mask 默认开启，register_log.ip 列存脱敏值（末段 → 0）；
+		// ip_segment 列不受影响，仍为完整段。
+		expect(row.ip).toBe('203.0.113.0');
 		expect(row.ip_segment).toBe(TEST_IP_OK);
 	});
 
@@ -377,12 +379,13 @@ describe('审计日志与日志 list API（C 路）', () => {
 	});
 
 	it('registerLog list：按 ip 筛选 + 分页', async () => {
-		// beforeAll 已在本 describe 层注册 audit-target@example.com（TEST_IP_OK）
-		const res = await api(`/registerLog/list?ip=${TEST_IP_OK}&num=1&size=10`, { token: adminToken });
+		// beforeAll 已在本 describe 层注册 audit-target@example.com（TEST_IP_OK）。
+		// Phase 7：log_ip_mask 默认开启，库里存的是脱敏 IP，故按脱敏值筛选。
+		const res = await api(`/registerLog/list?ip=203.0.113.0&num=1&size=10`, { token: adminToken });
 		expect(res.json.code).toBe(200);
 		expect(res.json.data.total).toBeGreaterThanOrEqual(1);
 		for (const row of res.json.data.list) {
-			expect(row.ip.startsWith(TEST_IP_OK)).toBe(true);
+			expect(row.ip.startsWith('203.0.113.0')).toBe(true);
 		}
 	});
 

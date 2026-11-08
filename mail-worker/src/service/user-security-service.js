@@ -9,7 +9,8 @@ import BizError from '../error/biz-error';
 import { t } from '../i18n/i18n';
 
 const ALLOWED_RETENTION_DAYS = [0, 30, 90, 365];
-const DEFAULTS = { loginAlert: 1, e2eeEnabled: 0, retentionDays: 0, e2eeSalt: '' };
+const ALLOWED_AUTO_LOCK_MINUTES = [0, 5, 15, 30];
+const DEFAULTS = { loginAlert: 1, e2eeEnabled: 0, retentionDays: 0, e2eeSalt: '', autoLockMinutes: 0 };
 
 const userSecurityService = {
 
@@ -20,7 +21,9 @@ const userSecurityService = {
 				loginAlert: row.loginAlert === 1 ? 1 : 0,
 				e2eeEnabled: row.e2eeEnabled === 1 ? 1 : 0,
 				retentionDays: row.retentionDays ?? 0,
-				e2eeSalt: row.e2eeSalt || ''
+				e2eeSalt: row.e2eeSalt || '',
+				// 旧库无 auto_lock_minutes 列时（迁移未跑）读到 undefined，按 0 兜底。
+				autoLockMinutes: ALLOWED_AUTO_LOCK_MINUTES.includes(row.autoLockMinutes) ? row.autoLockMinutes : 0
 			} : { ...DEFAULTS };
 			// C 路对齐项（契约 §1.3 之外）：安全评分的 TOTP +30 需要该状态，
 			// 读 user_totp.enabled；读失败默认 false，不阻断返回。
@@ -54,6 +57,13 @@ const userSecurityService = {
 		}
 		if (typeof params.e2eeSalt === 'string' && params.e2eeSalt !== '') {
 			updates.e2eeSalt = params.e2eeSalt;
+		}
+		if (params.autoLockMinutes !== undefined) {
+			const minutes = Number(params.autoLockMinutes);
+			if (!ALLOWED_AUTO_LOCK_MINUTES.includes(minutes)) {
+				throw new BizError(t('securityInvalidAutoLock'), 400);
+			}
+			updates.autoLockMinutes = minutes;
 		}
 		if (Object.keys(updates).length === 0) {
 			return this.get(c, userId);

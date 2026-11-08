@@ -63,8 +63,11 @@ id = "${KV_NAMESPACE_ID}"
 binding = "r2"
 bucket_name = "${R2_BUCKET_NAME}"
 
-[[send_email]]
-name = "email"
+# TEMP 2026-11-08：CF Email Sending 未在面板开通，email 绑定存在会让站外信优先走 CF 并报
+# "destination address is not a verified address"、且不回落 Resend；先去掉 email 绑定，
+# 让站外信走已验证的 Resend（付费 Key），等面板开通 CF 发信并验证发送域名后再恢复本段并重部署。
+#[[send_email]]
+#name = "email"
 
 [[send_email]]
 name = "forward"

@@ -80,6 +80,9 @@ export const setting = sqliteTable('setting', {
 	regKeyAlertThreshold: integer('reg_key_alert_threshold').default(500).notNull(),
 	// Phase 6：日志留存天数（默认 90，0 = 永久保留）与日志 IP 脱敏开关（0 关 / 1 开）
 	logRetentionDays: integer('log_retention_days').default(90).notNull(),
-	logIpMask: integer('log_ip_mask').default(0).notNull()
+	logIpMask: integer('log_ip_mask').default(0).notNull(),
+	// Phase 7：AI 写信/回信/摘要总开关（直白布尔语义：1 = 开启（默认），0 = 关闭；
+	// 注意与站内多数 0=OPEN / 1=CLOSE 的反向开关不同，读写时不要套用旧约定）
+	aiEnabled: integer('ai_enabled').default(1).notNull()
 });
 export default setting

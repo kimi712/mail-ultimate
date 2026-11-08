@@ -78,6 +78,17 @@ npx wrangler r2 bucket create mail-ultimate
 6. **Resend 备用通道**：在 Resend 新建域名 aevorynthtech.com、取 API Key；**不要复用老站的 Resend token**（老站 token 绑的是 mail.flame.edu.kg）。部署后在管理后台设置页填入（Resend Key 只填后台，不进 wrangler 配置、不写文档）。
 7. **验证主通道真的在用**（部署后，`DEPLOY.md` §6 第 3 项冒烟时做）：管理后台 → 系统设置页，看发信服务一栏显示的是 **Cloudflare Email Sending** 还是 Resend Token（`setting-service.js:93` 的 `hasCfEmail = !!c.env.email` 决定显示）；再发一封站外测试信，确认走 CF 通道（Worker 日志 / 收件方收到的头里无 Resend 痕迹）。如果显示 Resend，说明 `email` 绑定没生效——回 §5.1 核对 `wrangler.deploy.toml` 里有没有 `name = "email"` 这一节。
 
+### 2.3 AI — Workers AI（开源权重模型）
+
+> 用户 2026-11-08 定：**AI 只走 Workers AI 上的开源权重模型，不接任何闭源商业 API、不需要用户填 key**。
+
+- 模型：主 `@cf/meta/llama-3.1-8b-instruct`，备用 `@cf/meta/llama-3-8b-instruct`；主模型失败时自动降级，两个都不可用时接口返回 `ai_unavailable`（HTTP 仍为 200，见 `mail-worker/src/service/ai-service.js`）。
+- 绑定：`[ai] binding = "ai"`，已在 `mail-worker/wrangler.toml` 与 `deploy.sh` 生成的 `wrangler.deploy.toml` 模板（§5.1）里，无需额外配置、无需在 `.deploy.env` 里加 key。
+- 开关：`setting.ai_enabled`（1 = 开启（默认），0 = 关闭；注意与站内多数 0=开 / 1=关的反向开关不同），管理后台设置页 Workers AI 一栏可关；关闭时三个接口返回 `ai_disabled`。
+- 限流：每用户每天最多 50 次 AI 调用（KV 计数，`ai_day:<userId>:<日期>`），超了返回 `ai_quota_exceeded`；只在 AI 成功返回后计数。
+- 接口（均需登录，任意登录用户可用）：`POST /api/ai/compose`（`{prompt, tone?}`）、`POST /api/ai/reply`（`{emailId}` 或 `{subject, body, sender}`）、`POST /api/ai/summarize`（`{emailId}` 或 `{body}`）。后端只返回语言无关的错误码（`ai_disabled` / `ai_quota_exceeded` / `ai_unavailable` / `ai_invalid_input` / `ai_not_found`），不返回中文提示；前端按 `body.code` 查 `ai.*` 翻译 key 展示（key 清单见 `PHASE7.md`）。
+- 提示词按用户语言（`user.locale`，默认中文）生成，覆盖 8 语种。
+
 ## 3. 密钥与配置（全部重新生成，绝不复用老站）
 
 | 配置项 | 怎么来 | 填哪里 |
@@ -189,15 +200,18 @@ command = "npm --prefix ../mail-vue install --legacy-peer-deps --no-package-lock
    跑完立即核对（`wrangler d1 execute mail-ultimate --remote --command "..."`）：
    - `pragma_table_info(user)` 含 `locale` 列；`pragma_table_info(setting)` 含 `reg_key_alert_threshold`、`reg_circuit_open` 等新列；
    - `login_log` / `alert_log` / `register_log` / `audit_log` / `ip_blocklist` 五表存在；
-   - `user_totp` / `user_passkey` / `user_security` 三表存在（第六阶段）；`pragma_table_info(setting)` 含 `log_retention_days`、`log_ip_mask`；`pragma_table_info(email)` 含 `e2ee`；
+   - `user_totp` / `user_passkey` / `user_security` 三表存在（第六阶段）；`pragma_table_info(setting)` 含 `log_retention_days`、`log_ip_mask`、`ai_enabled`（第七阶段 AI 开关）；`pragma_table_info(email)` 含 `e2ee`；
+   - `pragma_table_info(user)` 含 `wallpaper`、`wallpaper_tags`（第七阶段壁纸偏好）；`pragma_table_info(user_security)` 含 `auto_lock_minutes`（第七阶段闲置自动锁定）；`setting.log_ip_mask` 默认应为 1（第七阶段脱敏默认开启）；
    - perm 37–45 存在（37–42 第一阶段，43–45 第二阶段：告警中心父、告警查看、用户导出）。
-2. **管理后台设置**（管理员登录后）：填 Turnstile Site/Secret Key、Resend Key、TG Bot Token/Chat ID；确认注册验证 = OPEN、单 IP 24h 限 3、熔断阈值 20/分钟、密钥告警阈值 500；新建至少一把注册密钥。
+2. **管理后台设置**（管理员登录后）：填 Turnstile Site/Secret Key、Resend Key、TG Bot Token/Chat ID；确认注册验证 = OPEN、单 IP 24h 限 3、熔断阈值 20/分钟、密钥告警阈值 500；确认 AI 助手开关 = 开启（默认开启，设置页 Workers AI 一栏）；新建至少一把注册密钥。
 3. **收发信冒烟**：注册一个测试账号（走 Turnstile）→ 登录 → 发一封站内信 → 发一封站外信（走 CF Email）→ 从外部邮箱回一封（走 Email Routing 收信）→ 确认收发都通。**站外信发出前先核对主通道**：管理后台 → 系统设置页，发信服务一栏须显示 **Cloudflare Email Sending**（不是 Resend Token）；若显示 Resend，说明 `email` 绑定没生效，回 §2.2 第 5 步核对 `wrangler.deploy.toml` 里有没有 `name = "email"` 这一节。
 4. **风控冒烟**：后台用户列表 IP 列/筛选/导出、仪表盘 risk 卡片、封禁管理页、告警中心、注册日志页逐项打开一次；故意用同一 IP 注册第 4 个账号应被拒（`regIpLimit` 人话提示）。
 5. **巡检上线**（甲骨文，见 `oracle-patrol/README.md`）：填真实 `config.json`（D1 ID、CF API Token、TG、管理员账号）→ `--once --dry-run` 看拟封禁/WAF 表达式无误 → `--once` 实跑一次 → systemd 启用；Uptime Kuma 建 push 监控；热备机只装不启动。
 6. **WAF 规则**：在 aevorynthtech.com 的 Zone 里建规则 `mail-ultimate-ip-blocklist`（表达式 `http.host eq "aevorynthtech.com" and ip.src in { ... }`，初始为空集或巡检首次同步后自动生成；巡检只改这一条规则，不动其他规则）。
 7. **回滚预案**：任何一步失败，先停新站注册（设置页关注册验证改为 CLOSE 或直接停 Worker 的路由），不要动老站；Worker 可 `wrangler rollback` 回上一版本；D1 有问题时用甲骨文备份恢复（备份同步见 `oracle-patrol/README.md`）；`/init` 幂等，可重跑。
 8. **安全加固与 SMTP 冒烟**（见 `PHASE5-6.md` §7 回归 25–36）：TOTP 开通→登录验证、Passkey 注册→登录、会话踢出、安全中心读写、E2EE 站外拒发/站内解密、安全头、日志清理、IP 脱敏逐项核对；SMTP 守护进程部署后真实联调（`SMTP-DEPLOY.md`）。**注意：公网 587/465 入口待 Spectrum 方案确认（`PHASE5-6.md` §6.1），确认前不要向用户公布 `smtp.aevorynthtech.com`。**
+9. **AI 冒烟**（第七阶段，见 §2.3）：确认 `wrangler.deploy.toml` 含 `[ai] binding = "ai"`（deploy.sh 模板自带，不用手加）；登录后调 `POST /api/ai/compose`（`{prompt}`）、`/api/ai/reply`（`{emailId}`）、`/api/ai/summarize`（`{emailId}`），应返回 HTTP 200 且 `body.code` 为 200；若返回 `ai_unavailable`，说明 Workers AI 绑定未生效，回 §5.1 核对 `[ai]` 一节。开关关闭时三接口返回 `ai_disabled`；每用户每天超 50 次返回 `ai_quota_exceeded`。AI 只走 Workers AI 开源权重模型，不接任何外部 AI API、不需要填 key。
+10. **第七阶段其余冒烟**（见 `PHASE7.md` §14）：壁纸——设置页壁纸区 15 张预置图能加载、切换生效、推荐行按标签出结果、上传一张自定义壁纸（R2 写入与 `/oss/` 读回）、换设备登录后选中值同步；开场动画——首屏出现远景 + 字标 + 名言轮换，8 秒消失，点“不再显示”后下次不再出现，跳过按钮与 Esc 生效；发信容灾——CF 未开通时站外信走 Resend 发出（状态 SENT），`alert_log` 里出现 `type='failover'` 的记录；安全打磨——登录历史列表、加密徽标、闲置自动锁定逐项核对；语言切换器与搜索——顶栏切换 8 语种即时生效、搜索跨文件夹可用。
 
 ## 7. GitHub 集成（只留接口）
 

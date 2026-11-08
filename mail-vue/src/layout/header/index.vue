@@ -16,23 +16,48 @@
         </el-icon>
       </el-button>
     </div>
+    <!-- Phase 7：顶栏常驻全局搜索（所有页面可用；面板内可切收件箱/已发送范围）。 -->
     <email-search
-      v-if="showInboxSearch"
-      :store="emailStore"
-      :search-options="inboxSearchOptions"
+      :store="activeSearchStore"
+      :search-options="activeSearchOptions"
+      :scopes="searchScopes"
+      :scope="searchScope"
       :class="{ 'account-show': accountPanelShow }"
-      @search="returnToList('email')"
-      @reset="returnToList('email')"
-    />
-    <email-search
-      v-else-if="showSentSearch"
-      :store="sendStore"
-      :search-options="sentSearchOptions"
-      :class="{ 'account-show': accountPanelShow }"
-      @search="returnToList('send')"
-      @reset="returnToList('send')"
+      @update:scope="searchScope = $event"
+      @search="goToSearchList"
+      @reset="goToSearchList"
     />
     <div class="toolbar">
+      <!-- Phase 7：顶栏语言切换器（地球图标 + 下拉，8 语种原生名；复用设置页同一切换机制）。 -->
+      <el-dropdown trigger="click" popper-class="header-lang-dropdown" @command="changeLang">
+        <div class="icon-item lang-switcher" :title="t('lang.language')" :aria-label="t('lang.language')">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9S9.5 5.6 12 3z"/></svg>
+          <span class="lang-label">{{ currentLocaleLabel }}</span>
+          <span class="lang-caret">▾</span>
+        </div>
+        <template #dropdown>
+          <el-dropdown-menu>
+            <el-dropdown-item
+              v-for="item in SUPPORTED_LOCALES"
+              :key="item.short"
+              :command="item.short"
+              :class="{ 'is-active-lang': item.short === settingStore.lang }"
+            >{{ item.label }}</el-dropdown-item>
+          </el-dropdown-menu>
+        </template>
+      </el-dropdown>
+      <!-- Phase 7：壁纸快捷入口（跳设置页壁纸区 #wallpaper，区块由壁纸同事建）。 -->
+      <div
+        class="icon-item"
+        role="button"
+        tabindex="0"
+        :title="t('lang.wallpaper')"
+        :aria-label="t('lang.wallpaper')"
+        @click="goToWallpaper"
+        @keyup.enter="goToWallpaper"
+      >
+        <Icon icon="akar-icons:image" width="20" height="20"/>
+      </div>
       <el-dropdown
         ref="userDropdownRef"
         trigger="click"
@@ -100,7 +125,7 @@ import {Icon} from "@iconify/vue";
 import {useUiStore} from "@/store/ui.js";
 import {useUserStore} from "@/store/user.js";
 import {useRoute} from "vue-router";
-import {computed, onBeforeUnmount, onMounted, ref} from "vue";
+import {computed, nextTick, onBeforeUnmount, onMounted, ref, watch} from "vue";
 import {useSettingStore} from "@/store/setting.js";
 import {hasPerm} from "@/perm/perm.js"
 import {useI18n} from "vue-i18n";
@@ -108,6 +133,9 @@ import {setExtend} from "@/utils/day.js"
 import emailSearch from '@/components/email-search/index.vue'
 import {useEmailStore} from '@/store/email.js'
 import {useSendStore} from '@/store/send.js'
+import i18n from "@/i18n/index.js";
+import {SUPPORTED_LOCALES, SHORT_CODES, applyLocale, toStoredLocale} from "@/i18n/locale.js";
+import {setLocale} from "@/request/my.js";
 
 const {t} = useI18n();
 const route = useRoute();
@@ -133,20 +161,37 @@ const sentSearchOptions = computed(() => [
   {label: t('searchRecipientAddress'), type: 'recipientAddress'},
 ])
 const accountPanelShow = computed(() => uiStore.accountShow && hasPerm('account:query'))
-const showInboxSearch = computed(() =>
-  route.meta.name === 'email' || isMailboxDetail('inbox')
-)
-const showSentSearch = computed(() =>
-  route.meta.name === 'send' || isMailboxDetail('sent')
-)
+
+// Phase 7：顶栏全局搜索范围（收件箱/已发送），默认跟随当前路由；
+// 面板内切换范围只换 store，不跳页，真正搜索/重置时再跳到对应列表。
+const searchScope = ref(route.meta.name === 'send' || isMailboxDetail('sent') ? 'sent' : 'inbox')
+const searchScopes = computed(() => [
+  {label: t('search.scopeInbox'), value: 'inbox'},
+  {label: t('search.scopeSent'), value: 'sent'},
+])
+const activeSearchStore = computed(() => searchScope.value === 'sent' ? sendStore : emailStore)
+const activeSearchOptions = computed(() => searchScope.value === 'sent' ? sentSearchOptions.value : inboxSearchOptions.value)
 
 function isMailboxDetail(mailbox) {
   return route.meta.name === 'content' && route.params.mailbox === mailbox
 }
 
-function returnToList(listName) {
-  if (route.meta.name !== 'content') return
-  router.push({name: listName})
+watch(
+  () => [route.name, route.params.mailbox],
+  () => {
+    if (route.meta.name === 'send' || isMailboxDetail('sent')) {
+      searchScope.value = 'sent'
+    } else if (route.meta.name === 'email' || isMailboxDetail('inbox')) {
+      searchScope.value = 'inbox'
+    }
+  }
+)
+
+function goToSearchList() {
+  const listName = searchScope.value === 'sent' ? 'send' : 'email'
+  if (route.name !== listName) {
+    router.push({name: listName})
+  }
 }
 
 const accountCount = computed(() => {
@@ -228,9 +273,48 @@ async function copyEmail(email) {
   }
 }
 
+// Phase 7：顶栏语言切换器（8 语种即时生效；复用设置页同一机制：
+// applyLocale 懒加载文案 + 写本地 mail-locale，setLocale 同步后端 user.locale）。
+const currentLocaleLabel = computed(() => {
+  const found = SUPPORTED_LOCALES.find(item => item.short === settingStore.lang)
+  return found ? found.label : '简体中文'
+})
+
 function changeLang(lang) {
+  if (!SHORT_CODES.includes(lang) || lang === settingStore.lang) {
+    return
+  }
+  // dayjs 相对时间只内置 zh-cn/en（与旧 changeLang 保持一致）。
   setExtend(lang === 'en' ? 'en' : 'zh-cn')
-  settingStore.lang = lang
+  applyLocale(i18n, settingStore, lang)
+  // 已登录态同步到后端 user.locale；失败静默，下次登录时再同步。
+  setLocale(toStoredLocale(lang)).catch(() => {
+  })
+}
+
+// Phase 7：壁纸快捷入口——跳设置页壁纸区（id="wallpaper" 由壁纸同事建）。
+async function goToWallpaper() {
+  if (route.name !== 'setting') {
+    await router.push({name: 'setting'})
+    await nextTick()
+  }
+  try {
+    window.location.hash = 'wallpaper'
+  } catch (e) {
+  }
+  scrollToWallpaper(0)
+}
+
+function scrollToWallpaper(attempt) {
+  const el = document.getElementById('wallpaper')
+  if (el) {
+    el.scrollIntoView({behavior: 'smooth', block: 'start'})
+    return
+  }
+  // 壁纸区尚未挂载时重试；10 次后放弃，不报错。
+  if (attempt < 10) {
+    setTimeout(() => scrollToWallpaper(attempt + 1), 200)
+  }
 }
 
 function openSend() {
@@ -300,6 +384,11 @@ onBeforeUnmount(() => {
 <style>
 .detail-dropdown {
   color: var(--el-text-color-primary) !important;
+}
+
+.header-lang-dropdown .is-active-lang {
+  color: var(--el-color-primary);
+  font-weight: 700;
 }
 </style>
 <style lang="scss" scoped>
@@ -489,6 +578,33 @@ onBeforeUnmount(() => {
 
   .icon-item:hover {
     background: var(--base-fill);
+  }
+
+  .lang-switcher {
+    width: auto;
+    padding: 0 8px;
+    gap: 4px;
+    font-size: 13px;
+    color: var(--el-text-color-primary);
+    white-space: nowrap;
+
+    .lang-label {
+      max-width: 76px;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+
+    .lang-caret {
+      font-size: 10px;
+      color: var(--el-text-color-secondary);
+    }
+  }
+
+  @media (max-width: 767px) {
+    .lang-switcher .lang-label,
+    .lang-switcher .lang-caret {
+      display: none;
+    }
   }
 
   .avatar {

@@ -136,6 +136,12 @@ export const settingConst = {
 		OPEN: 0,
 		CLOSE: 1
 	},
+	// Phase 7：ai_enabled 用直白布尔语义（1 = 开启，0 = 关闭），与站内
+	// 多数 0=OPEN / 1=CLOSE 的反向开关不同，读写时不要套用旧约定。
+	aiEnabled: {
+		OPEN: 1,
+		CLOSE: 0
+	},
 	syncDelete: {
 		OPEN: 0,
 		CLOSE: 1

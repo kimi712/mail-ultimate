@@ -80,6 +80,8 @@ const zh = {
 	passkeyChallengeExpired: 'Passkey 验证已过期，请重试',
 	sessionNotFound: '会话不存在',
 	securityInvalidRetention: '保留期限只能选择 0、30、90 或 365 天',
+	securityInvalidAutoLock: '闲置自动锁定只能选择从不、5、15 或 30 分钟',
+	securityUnlockLocked: '解锁失败次数过多，请 5 分钟后再试',
 	e2eeExternalBlocked: '已开启端到端加密，无法向站外地址发信',
 	exportTooManyRows: '导出行数超过 5000，请缩小筛选范围后再导出',
 	newIpLoginSubject: '新设备登录提醒',

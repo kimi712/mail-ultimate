@@ -32,6 +32,50 @@
           </div>
         </div>
 
+        <!-- 设备管理（当前登录的全部设备，发现陌生设备请立即踢出并改密码） -->
+        <div class="section">
+          <div class="section-title">{{ $t('sessionTitle') }}</div>
+          <div class="desc">{{ $t('securityDevicesHint') }}</div>
+          <div class="row">
+            <el-button :loading="sessionLoading" @click="revokeOthers">{{ $t('sessionRevokeOthers') }}</el-button>
+          </div>
+          <el-table :data="sessionList" v-loading="sessionLoading" style="width: 100%" :empty-text="$t('sessionEmpty')">
+            <el-table-column prop="ua" :label="$t('loginLogDevice')">
+              <template #default="{row}">{{ row.ua || $t('sessionUnknown') }}</template>
+            </el-table-column>
+            <el-table-column prop="ip" :label="$t('loginLogIp')" width="160" />
+            <el-table-column prop="createdAt" :label="$t('loginLogTime')" width="180" />
+            <el-table-column width="150">
+              <template #default="{row}">
+                <el-tag v-if="row.current" type="success">{{ $t('sessionCurrent') }}</el-tag>
+                <el-button v-else type="danger" link @click="revokeOne(row)">{{ $t('sessionRevoke') }}</el-button>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
+        <!-- 登录历史（最近 20 条，走 Phase 7 新接口 GET /security/login-history） -->
+        <div class="section">
+          <div class="section-title">{{ $t('loginLogTitle') }}</div>
+          <div class="desc">{{ $t('securityLoginHistoryNoGeo') }}</div>
+          <el-table :data="loginLogList" v-loading="loginLogLoading" style="width: 100%" :empty-text="$t('loginLogEmpty')">
+            <el-table-column prop="time" :label="$t('loginLogTime')" width="180" />
+            <el-table-column prop="ip" :label="$t('loginLogIp')" width="160" />
+            <el-table-column :label="$t('loginLogDevice')">
+              <template #default="{row}">{{ [row.device, row.browser].filter(Boolean).join(' · ') || $t('sessionUnknown') }}</template>
+            </el-table-column>
+            <el-table-column :label="$t('securityLoginHistoryLocation')" width="110">
+              <template #default="{row}">{{ row.location || $t('securityLoginHistoryNoLocation') }}</template>
+            </el-table-column>
+            <el-table-column :label="$t('loginLogNewIp')" width="110">
+              <template #default="{row}">
+                <el-tag v-if="row.isNewIp === 1" type="warning">{{ $t('loginLogIsNew') }}</el-tag>
+                <el-tag v-else type="info">{{ $t('loginLogNotNew') }}</el-tag>
+              </template>
+            </el-table-column>
+          </el-table>
+        </div>
+
         <!-- TOTP 二次验证 -->
         <div class="section">
           <div class="section-title">{{ $t('totpTitle') }}</div>
@@ -95,43 +139,6 @@
           </el-table>
         </div>
 
-        <!-- 登录历史（最近 20 条，复用 request/my.js 的 loginLog） -->
-        <div class="section">
-          <div class="section-title">{{ $t('loginLogTitle') }}</div>
-          <el-table :data="loginLogList" v-loading="loginLogLoading" style="width: 100%" :empty-text="$t('loginLogEmpty')">
-            <el-table-column prop="createTime" :label="$t('loginLogTime')" width="180" />
-            <el-table-column prop="ip" :label="$t('loginLogIp')" width="160" />
-            <el-table-column prop="ua" :label="$t('loginLogDevice')" />
-            <el-table-column :label="$t('loginLogNewIp')" width="110">
-              <template #default="{row}">
-                <el-tag v-if="row.isNewIp === 1" type="warning">{{ $t('loginLogIsNew') }}</el-tag>
-                <el-tag v-else type="info">{{ $t('loginLogNotNew') }}</el-tag>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-
-        <!-- 设备管理 -->
-        <div class="section">
-          <div class="section-title">{{ $t('sessionTitle') }}</div>
-          <div class="row">
-            <el-button :loading="sessionLoading" @click="revokeOthers">{{ $t('sessionRevokeOthers') }}</el-button>
-          </div>
-          <el-table :data="sessionList" v-loading="sessionLoading" style="width: 100%" :empty-text="$t('sessionEmpty')">
-            <el-table-column prop="ua" :label="$t('loginLogDevice')">
-              <template #default="{row}">{{ row.ua || $t('sessionUnknown') }}</template>
-            </el-table-column>
-            <el-table-column prop="ip" :label="$t('loginLogIp')" width="160" />
-            <el-table-column prop="createdAt" :label="$t('loginLogTime')" width="180" />
-            <el-table-column width="150">
-              <template #default="{row}">
-                <el-tag v-if="row.current" type="success">{{ $t('sessionCurrent') }}</el-tag>
-                <el-button v-else type="danger" link @click="revokeOne(row)">{{ $t('sessionRevoke') }}</el-button>
-              </template>
-            </el-table-column>
-          </el-table>
-        </div>
-
         <!-- 提醒开关与保留期限 -->
         <div class="section">
           <div class="section-title">{{ $t('securityLoginAlert') }}</div>
@@ -181,6 +188,31 @@
           </div>
         </div>
 
+        <!-- 闲置自动锁定 -->
+        <div class="section">
+          <div class="section-title">{{ $t('securityAutoLock') }}</div>
+          <div class="desc">{{ $t('securityAutoLockDesc') }}</div>
+          <el-select v-model="security.autoLockMinutes" :disabled="saving" @change="onAutoLockChange" style="width: 220px">
+            <el-option :value="0" :label="$t('securityAutoLock0')" />
+            <el-option :value="5" :label="$t('securityAutoLock5')" />
+            <el-option :value="15" :label="$t('securityAutoLock15')" />
+            <el-option :value="30" :label="$t('securityAutoLock30')" />
+          </el-select>
+        </div>
+
+        <!-- 我的数据：导出与删除 -->
+        <div class="section">
+          <div class="section-title">{{ $t('securityMyData') }}</div>
+          <div class="desc">{{ $t('securityExportDesc') }}</div>
+          <div class="row">
+            <el-button :loading="exportLoading" @click="exportMyData">{{ $t('securityExport') }}</el-button>
+          </div>
+          <div class="desc">{{ $t('securityDeleteAccountDesc') }}</div>
+          <div class="row">
+            <el-button type="danger" :loading="deleteLoading" @click="deleteMyAccount">{{ $t('securityDeleteAccount') }}</el-button>
+          </div>
+        </div>
+
       </div>
     </el-scrollbar>
   </div>
@@ -188,12 +220,14 @@
 <script setup>
 import {ref, reactive, computed, defineOptions, onMounted} from 'vue'
 import {useI18n} from 'vue-i18n'
-import {loginLog} from '@/request/my.js'
+import {useRouter} from 'vue-router'
+import {userDelete} from '@/request/my.js'
 import {
   getSecurity, setSecurity,
   totpSetup, totpEnable, totpDisable,
   passkeyRegisterOptions, passkeyRegister, passkeyList, passkeyDelete,
-  sessions, revokeSession, revokeOtherSessions
+  sessions, revokeSession, revokeOtherSessions,
+  loginHistory, exportData
 } from '@/request/security.js'
 import {
   generateSalt, unlockWithPassword, hasMemoryKey, clearMemoryKey
@@ -205,12 +239,14 @@ defineOptions({
 })
 
 const {t} = useI18n()
+const router = useRouter()
 
 const security = reactive({
   loginAlert: 1,
   e2eeEnabled: 0,
   retentionDays: 0,
-  e2eeSalt: ''
+  e2eeSalt: '',
+  autoLockMinutes: 0
 })
 const loginAlertOn = ref(true)
 const saving = ref(false)
@@ -238,6 +274,8 @@ const sessionLoading = ref(false)
 const e2eePassword = ref('')
 const e2eeUnlocked = ref(false)
 const e2eeLoading = ref(false)
+const exportLoading = ref(false)
+const deleteLoading = ref(false)
 
 // 安全评分：TOTP +30、Passkey +30、登录提醒 +20、30 天内无异地登录 +20，满分 100。
 const noNewIp30d = computed(() => {
@@ -246,10 +284,10 @@ const noNewIp30d = computed(() => {
   }
   const now = Date.now()
   return !loginLogList.value.some((row) => {
-    if (row.isNewIp !== 1 || !row.createTime) {
+    if (row.isNewIp !== 1 || !row.time) {
       return false
     }
-    const ts = Date.parse(String(row.createTime).replace(' ', 'T') + 'Z')
+    const ts = Date.parse(String(row.time).replace(' ', 'T') + 'Z')
     return !isNaN(ts) && (now - ts) <= 30 * 24 * 3600 * 1000
   })
 })
@@ -293,6 +331,7 @@ function loadSecurity() {
     loginAlertOn.value = !!data.loginAlert
     security.e2eeEnabled = data.e2eeEnabled ? 1 : 0
     security.retentionDays = [0, 30, 90, 365].includes(data.retentionDays) ? data.retentionDays : 0
+    security.autoLockMinutes = [0, 5, 15, 30].includes(data.autoLockMinutes) ? data.autoLockMinutes : 0
     security.e2eeSalt = data.e2eeSalt || ''
     if (data.totpEnabled === true) {
       totpEnabled.value = true
@@ -316,7 +355,7 @@ function loadPasskeys() {
 
 function loadLoginLog() {
   loginLogLoading.value = true
-  return loginLog({num: 1, size: 20}).then((data) => {
+  return loginHistory({num: 1, size: 20}).then((data) => {
     loginLogList.value = data.list || []
     loginLogLoaded.value = true
     loginLogLoading.value = false
@@ -488,6 +527,57 @@ function onRetentionChange(value) {
     security.retentionDays = prev
     saving.value = false
     toast(e?.message || t('reqFailErrorMsg'))
+  })
+}
+
+// ---- 闲置自动锁定 / 我的数据（Phase 7） ----
+function onAutoLockChange(value) {
+  saving.value = true
+  const prev = security.autoLockMinutes
+  setSecurity({autoLockMinutes: value}).then(() => {
+    saving.value = false
+    window.dispatchEvent(new CustomEvent('auto-lock-settings-changed', {detail: {autoLockMinutes: value}}))
+  }).catch((e) => {
+    security.autoLockMinutes = prev
+    saving.value = false
+    toast(e?.message || t('reqFailErrorMsg'))
+  })
+}
+
+function exportMyData() {
+  exportLoading.value = true
+  exportData().then((data) => {
+    const blob = new Blob([JSON.stringify(data, null, 2)], {type: 'application/json'})
+    const url = URL.createObjectURL(blob)
+    const a = document.createElement('a')
+    const stamp = new Date().toISOString().slice(0, 10).replace(/-/g, '')
+    a.href = url
+    a.download = `mail-export-${stamp}.json`
+    a.click()
+    URL.revokeObjectURL(url)
+    exportLoading.value = false
+    toast(t('securityExportDone'), 'success')
+  }).catch((e) => {
+    exportLoading.value = false
+    toast(e?.message || t('reqFailErrorMsg'))
+  })
+}
+
+function deleteMyAccount() {
+  ElMessageBox.confirm(t('securityDeleteAccountConfirm'), {
+    confirmButtonText: t('confirm'),
+    cancelButtonText: t('cancel'),
+    type: 'warning'
+  }).then(() => {
+    deleteLoading.value = true
+    userDelete().then(() => {
+      localStorage.removeItem('token')
+      router.replace('/login')
+    }).catch((e) => {
+      deleteLoading.value = false
+      toast(e?.message || t('reqFailErrorMsg'))
+    })
+  }).catch(() => {
   })
 }
 

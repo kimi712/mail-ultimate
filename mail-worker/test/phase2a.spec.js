@@ -235,7 +235,8 @@ describe('登录日志与异地提醒（A 路）', () => {
 		let row = await env.db.prepare(
 			`SELECT ip, is_new_ip, ua FROM login_log WHERE user_id = ? ORDER BY log_id DESC LIMIT 1`
 		).bind(userId).first();
-		expect(row.ip).toBe(IP_A);
+		// Phase 7：log_ip_mask 默认开启，login_log.ip 列存脱敏值（末段 → 0）。
+		expect(row.ip).toBe('203.0.113.0');
 		expect(row.is_new_ip).toBe(0);
 		// getUserAgent() 拼串：测试 UA 无浏览器/OS 信息时 device 默认为 Desktop
 		expect(row.ua).toBe('Desktop');
@@ -255,7 +256,7 @@ describe('登录日志与异地提醒（A 路）', () => {
 		row = await env.db.prepare(
 			`SELECT ip, is_new_ip FROM login_log WHERE user_id = ? ORDER BY log_id DESC LIMIT 1`
 		).bind(userId).first();
-		expect(row.ip).toBe(IP_B);
+		expect(row.ip).toBe('203.0.113.0'); // Phase 7：脱敏后 IP_B 与 IP_A 同为 203.0.113.0
 		expect(row.is_new_ip).toBe(1);
 		const sentAfter = await env.db.prepare(
 			`SELECT COUNT(*) AS n FROM email WHERE user_id = ? AND type = 1`
@@ -272,7 +273,7 @@ describe('登录日志与异地提醒（A 路）', () => {
 		row = await env.db.prepare(
 			`SELECT ip, is_new_ip FROM login_log WHERE user_id = ? ORDER BY log_id DESC LIMIT 1`
 		).bind(userId).first();
-		expect(row.ip).toBe(IP_B);
+		expect(row.ip).toBe('203.0.113.0'); // Phase 7：脱敏后 IP_B 与 IP_A 同为 203.0.113.0
 		expect(row.is_new_ip).toBe(0);
 	});
 

@@ -9,12 +9,24 @@
       </span>
       <Icon class="icon" v-if="emailStore.contentData.showReply" v-perm="'email:send'"  @click="openReply" icon="fluent-mdl2:reply" width="19" height="19" />
       <Icon class="icon" v-if="emailStore.contentData.showReply" v-perm="'email:send'"  @click="openForward" icon="iconoir:arrow-up-right" width="20" height="20" />
+      <!-- Phase 7：AI 摘要。aiEnabled 为 0（开关关闭）时隐藏；加密未解锁的邮件不可摘要（服务端只有密文）。 -->
+      <el-button v-if="aiEnabled" size="small" :loading="aiSummarizing" :disabled="aiSummarizing || !canAiSummarize" @click="summarizeWithAi">{{ $t('ai.summarize') }}</el-button>
     </div>
     <div></div>
     <el-scrollbar class="scrollbar">
       <div class="container">
         <div class="email-title">
           {{ email.subject }}
+        </div>
+        <!-- Phase 7：AI 摘要面板（3–5 行），展示在详情页内；切邮件时清空。 -->
+        <div v-if="aiSummarizing || aiSummary" class="ai-summary">
+          <div class="ai-summary-head">
+            <span class="ai-summary-title">{{ $t('ai.summary') }}</span>
+            <span v-if="aiSummaryRemaining !== null" class="ai-summary-remaining">{{ $t('ai.remaining', {count: aiSummaryRemaining}) }}</span>
+            <Icon v-if="aiSummary" class="icon" icon="material-symbols-light:close-rounded" width="18" height="18" @click="aiSummary = null" />
+          </div>
+          <div v-if="aiSummarizing" class="ai-summary-body">{{ $t('ai.generating') }}</div>
+          <pre v-else class="ai-summary-body">{{ aiSummary }}</pre>
         </div>
         <div class="content">
           <div class="email-info">
@@ -35,6 +47,13 @@
               <div class="receive"><span class="source">{{$t('recipient')}}</span><span class="receive-email">{{  formateReceive(email.recipient) }}</span></div>
               <div class="date">
                 <div>{{ formatDetailDate(email.createTime) }}</div>
+              </div>
+              <div class="enc-row">
+                <el-tag v-if="email.e2ee === 1" type="success" size="small" effect="plain">
+                  <Icon icon="mdi:lock" width="13" height="13" style="vertical-align: -2px" />
+                  {{ $t('securityE2eeBadge') }}
+                </el-tag>
+                <span v-else class="transport-note">{{ $t('securityTransportEncrypted') }}</span>
               </div>
             </div>
             <el-alert v-if="email.status === 3" :closable="false" :title="toMessage(email.message)" class="email-msg" type="error" show-icon />
@@ -110,6 +129,7 @@ import {useI18n} from "vue-i18n";
 import {EmailUnreadEnum} from "@/enums/email-enum.js";
 import {sanitizeEmailHtml} from "@/utils/email-html.js";
 import {getSecurity} from "@/request/security.js";
+import {aiSummarize, aiErrorI18nKey} from "@/request/ai.js";
 import {hasMemoryKey, unlockWithPassword, decryptEmailParts, clearMemoryKey} from "@/utils/e2ee.js";
 const { t } = useI18n()
 
@@ -124,6 +144,49 @@ let senderResizeObserver = null
 
 const showPreview = ref(false)
 const srcList = reactive([])
+
+// Phase 7：AI 摘要。aiEnabled 取自 websiteConfig（settingStore.settings），
+// 后端默认 1（开启）；为 0 时按钮隐藏。未取到配置时按开启处理（与后端 ?? 1 一致）。
+const aiEnabled = computed(() => settingStore.settings?.aiEnabled !== 0)
+const aiSummarizing = ref(false)
+const aiSummary = ref(null)
+const aiSummaryRemaining = ref(null)
+// 加密邮件只有解锁后才有明文可摘要；未解锁时禁用（服务端 D1 里只有密文）。
+const canAiSummarize = computed(() => {
+  if (!email.value?.emailId) return false
+  if (isE2eeMail.value && e2eeState.value !== 'ready') return false
+  return true
+})
+
+async function summarizeWithAi() {
+  if (aiSummarizing.value || !canAiSummarize.value) return
+  aiSummarizing.value = true
+  aiSummary.value = null
+  try {
+    let data
+    if (isE2eeMail.value && e2eeState.value === 'ready') {
+      // 已解密的加密邮件直接传明文，避免后端对密文做摘要
+      data = await aiSummarize({subject: email.value.subject, body: decryptedText.value || email.value.text})
+    } else {
+      data = await aiSummarize({emailId: email.value.emailId})
+    }
+    aiSummary.value = data.summary || ''
+    if (typeof data.remaining === 'number') aiSummaryRemaining.value = data.remaining
+  } catch (e) {
+    if (e && e.code === 401) {
+      localStorage.removeItem('token')
+      router.replace('/login')
+      return
+    }
+    ElMessage({
+      message: t(aiErrorI18nKey(e && e.code)),
+      type: 'error',
+      plain: true,
+    })
+  } finally {
+    aiSummarizing.value = false
+  }
+}
 
 // 第六阶段 C 路：端到端加密邮件解密。
 // 解密结果只放在本页局部 ref 里，绝不写回 emailStore（store 会持久化 contentData，
@@ -263,6 +326,12 @@ const email = computed(() => emailStore.contentData.email || {
   content: '',
   text: '',
   recipient: '[]',
+})
+
+// Phase 7：切邮件时清空上封邮件的 AI 摘要（写在这里，email 已定义，避免 TDZ）。
+watch(() => email.value?.emailId, () => {
+  aiSummary.value = null
+  aiSummaryRemaining.value = null
 })
 
 const sentViaEmail = computed(() => {
@@ -716,6 +785,54 @@ const handleDelete = () => {
   .e2ee-unlock-row {
     display: flex;
     gap: 10px;
+  }
+}
+
+// Phase 7：加密状态标识行（端到端锁形徽标 / 普通邮件低调的传输加密文字）。
+.enc-row {
+  margin-top: 4px;
+
+  .transport-note {
+    font-size: 12px;
+    color: var(--secondary-text-color);
+  }
+}
+
+// Phase 7：AI 摘要面板。
+.ai-summary {
+  border: 1px solid var(--light-border-color);
+  border-radius: 6px;
+  background: var(--light-ill);
+  padding: 12px 14px;
+  margin-bottom: 16px;
+
+  .ai-summary-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 8px;
+
+    .ai-summary-title {
+      font-weight: bold;
+    }
+
+    .ai-summary-remaining {
+      font-size: 12px;
+      color: var(--secondary-text-color);
+      flex: 1;
+    }
+
+    .icon {
+      cursor: pointer;
+    }
+  }
+
+  .ai-summary-body {
+    font-family: inherit;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    line-height: 1.6;
   }
 }
 

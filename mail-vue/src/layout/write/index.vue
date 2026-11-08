@@ -12,6 +12,10 @@
         </div>
         <div style="display: flex; align-items: center; gap: 8px;">
           <el-tag v-if="e2eeEnabled" :type="e2eeUnlocked ? 'success' : 'warning'" size="small">{{ $t('e2eeBadge') }}</el-tag>
+          <!-- Phase 7：AI 写信 / 回信。aiEnabled 为 0（开关关闭）时隐藏按钮；
+               回信模式只显示 AI 回信，新写/转发/草稿只显示 AI 写信。 -->
+          <el-button v-if="aiEnabled && form.sendType !== 'reply'" size="small" type="primary" plain @click="openAiDialog('compose')">{{ $t('ai.compose') }}</el-button>
+          <el-button v-if="aiEnabled && form.sendType === 'reply'" size="small" type="primary" plain @click="openAiDialog('reply')">{{ $t('ai.reply') }}</el-button>
           <div @click="close" style="cursor: pointer; display: flex;">
             <Icon icon="material-symbols-light:close-rounded" width="22" height="22"/>
           </div>
@@ -103,6 +107,34 @@
         <el-button type="primary" @click="chooseContact">{{t('selectContacts')}}</el-button>
       </div>
     </el-dialog>
+    <!-- Phase 7：AI 写信 / 回信对话框。生成后先预览草稿（标题 + 正文），
+         点“使用草稿”才填入编辑器；remaining 为当日剩余次数。 -->
+    <el-dialog v-model="aiDialogVisible" :title="aiDialogMode === 'reply' ? t('ai.reply') : t('ai.compose')" class="ai-dialog" @closed="resetAiDialog">
+      <div v-if="aiDialogMode === 'compose'" class="ai-prompt">
+        <el-input v-model="aiPrompt" type="textarea" :rows="4" maxlength="2000" show-word-limit :placeholder="t('ai.composePlaceholder')" />
+      </div>
+      <div class="ai-tone-row">
+        <span class="ai-tone-label">{{ $t('ai.tone') }}</span>
+        <el-select v-model="aiTone" style="width: 140px">
+          <el-option value="formal" :label="t('ai.toneFormal')" />
+          <el-option value="friendly" :label="t('ai.toneFriendly')" />
+          <el-option value="concise" :label="t('ai.toneConcise')" />
+          <el-option value="neutral" :label="t('ai.toneNeutral')" />
+        </el-select>
+      </div>
+      <div v-if="aiDraft" class="ai-draft">
+        <div class="ai-draft-label">{{ $t('ai.subject') }}</div>
+        <div class="ai-draft-subject">{{ aiDraft.subject }}</div>
+        <div class="ai-draft-label">{{ $t('ai.body') }}</div>
+        <pre class="ai-draft-body">{{ aiDraft.body }}</pre>
+      </div>
+      <div v-if="aiRemaining !== null" class="ai-remaining">{{ $t('ai.remaining', {count: aiRemaining}) }}</div>
+      <template #footer>
+        <el-button @click="aiDialogVisible = false">{{ $t('cancel') }}</el-button>
+        <el-button type="primary" :loading="aiGenerating" @click="generateAiDraft">{{ aiGenerating ? $t('ai.generating') : (aiDialogMode === 'reply' ? $t('ai.reply') : $t('ai.compose')) }}</el-button>
+        <el-button v-if="aiDraft" type="success" :disabled="aiGenerating" @click="useAiDraft">{{ $t('ai.useDraft') }}</el-button>
+      </template>
+    </el-dialog>
   </div>
 </template>
 <script setup>
@@ -127,6 +159,7 @@ import dayjs from "dayjs";
 import {useI18n} from "vue-i18n";
 import {friendlySendError} from "@/utils/send-error.js";
 import {getSecurity} from "@/request/security.js";
+import {aiCompose, aiReply, aiErrorI18nKey} from "@/request/ai.js";
 import {hasMemoryKey, getMemoryKey, unlockWithPassword, encryptEmailParts, isInternalEmail} from "@/utils/e2ee.js";
 import router from "@/router/index.js";
 import {ElMessageBox} from "element-plus";
@@ -177,6 +210,96 @@ const form = reactive({
 })
 
 const selectRecipientList = ref([])
+
+// Phase 7：AI 写信 / 回信。aiEnabled 取自 websiteConfig（settingStore.settings），
+// 后端默认 1（开启）；为 0 时按钮隐藏。未取到配置时按开启处理（与后端 ?? 1 一致）。
+const aiEnabled = computed(() => settingStore.settings?.aiEnabled !== 0)
+const aiDialogVisible = ref(false)
+const aiDialogMode = ref('compose') // 'compose' | 'reply'
+const aiPrompt = ref('')
+const aiTone = ref('neutral')
+const aiGenerating = ref(false)
+const aiDraft = ref(null) // {subject, body}
+const aiRemaining = ref(null)
+
+function openAiDialog(mode) {
+  aiDialogMode.value = mode
+  aiDraft.value = null
+  aiDialogVisible.value = true
+}
+
+function resetAiDialog() {
+  aiPrompt.value = ''
+  aiTone.value = 'neutral'
+  aiDraft.value = null
+  aiGenerating.value = false
+}
+
+async function generateAiDraft() {
+  if (aiGenerating.value) return
+  if (aiDialogMode.value === 'compose' && !aiPrompt.value.trim()) {
+    ElMessage({
+      message: t('ai.invalidInput'),
+      type: 'error',
+      plain: true,
+    })
+    return
+  }
+  aiGenerating.value = true
+  try {
+    let data
+    if (aiDialogMode.value === 'compose') {
+      data = await aiCompose({prompt: aiPrompt.value.trim(), tone: aiTone.value})
+    } else {
+      // 回信按原邮件生成：传本人的 emailId，后端读原邮件；无 emailId 时后端报 ai_not_found
+      data = await aiReply({emailId: form.emailId, tone: aiTone.value})
+    }
+    aiDraft.value = {subject: data.subject || '', body: data.body || ''}
+    if (typeof data.remaining === 'number') aiRemaining.value = data.remaining
+  } catch (e) {
+    handleAiError(e)
+  } finally {
+    aiGenerating.value = false
+  }
+}
+
+// 把预览的 AI 草稿填入编辑器（标题进主题栏，正文经 defValue 进 TinyMCE，可再编辑）。
+// 回信时 AI 正文放在引用原文之上，引用块（backReply.content）原样保留。
+function useAiDraft() {
+  if (!aiDraft.value) return
+  if (aiDraft.value.subject) form.subject = aiDraft.value.subject
+  const bodyHtml = textToHtml(aiDraft.value.body)
+  if (aiDialogMode.value === 'reply') {
+    defValue.value = bodyHtml + '<div><br></div>' + (backReply.content || '')
+  } else {
+    defValue.value = bodyHtml
+  }
+  aiDialogVisible.value = false
+  aiDraft.value = null
+}
+
+// AI 返回的纯文本转编辑器 HTML：先转义再按行分段，避免原文 HTML 被当作标签解析。
+function textToHtml(text) {
+  const esc = String(text || '')
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+  return esc.split(/\n/).map(line => line ? `<p style="margin: 0 0 8px;">${line}</p>` : '<p style="margin: 0 0 8px;"><br></p>').join('')
+}
+
+function handleAiError(e) {
+  if (e && e.code === 401) {
+    localStorage.removeItem('token')
+    router.replace('/login')
+    return
+  }
+  ElMessage({
+    message: t(aiErrorI18nKey(e && e.code)),
+    type: 'error',
+    plain: true,
+  })
+}
 
 // 第六阶段 C 路：端到端加密状态（打开写信框时 best-effort 拉取；后端未落地时按未开启处理）。
 const e2eeEnabled = ref(false)
@@ -862,6 +985,61 @@ function close() {
 
 .add-contact {
   color: var(--regular-text-color)
+}
+
+/* Phase 7：AI 写信 / 回信对话框 */
+:deep(.ai-dialog) {
+  width: 520px !important;
+  @media (max-width: 560px) {
+    width: calc(100% - 40px) !important;
+  }
+}
+
+.ai-prompt {
+  margin-bottom: 12px;
+}
+
+.ai-tone-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 12px;
+
+  .ai-tone-label {
+    font-size: 14px;
+  }
+}
+
+.ai-draft {
+  border-top: 1px solid var(--el-border-color-light);
+  padding-top: 12px;
+
+  .ai-draft-label {
+    font-size: 13px;
+    color: var(--secondary-text-color);
+    margin-bottom: 4px;
+  }
+
+  .ai-draft-subject {
+    font-weight: bold;
+    margin-bottom: 10px;
+    word-break: break-word;
+  }
+
+  .ai-draft-body {
+    font-family: inherit;
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0 0 4px;
+    max-height: 260px;
+    overflow-y: auto;
+  }
+}
+
+.ai-remaining {
+  margin-top: 10px;
+  font-size: 13px;
+  color: var(--secondary-text-color);
 }
 
 .write-select {

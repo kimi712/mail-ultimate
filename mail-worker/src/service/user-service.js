@@ -17,6 +17,10 @@ import constant from '../const/constant';
 import { t } from '../i18n/i18n'
 import reqUtils from '../utils/req-utils';
 import {oauth} from "../entity/oauth";
+import loginLog from "../entity/login-log";
+import userTotp from "../entity/user-totp";
+import userPasskey from "../entity/user-passkey";
+import userSecurity from "../entity/user-security";
 import oauthService from "./oauth-service";
 import settingService from './setting-service';
 import starService from './star-service';
@@ -131,6 +135,21 @@ const userService = {
 		await accountService.physicsDeleteByUserIds(c, userIds);
 		await oauthService.deleteByUserIds(c, userIds);
 		await orm(c).delete(user).where(inArray(user.userId, userIds)).run();
+		// Phase 7：物理删除时一并清除该用户的个人安全数据，否则删号后
+		// 登录历史/TOTP/Passkey/安全设置行仍以 user_id 孤儿形式留在库里。
+		// audit_log / register_log 的行有意保留（管理员操作留痕与风控计数，
+		// 且受 log_retention_days 定期清理约束），见 PHASE7-PRIVACY-AUDIT.md。
+		try {
+			for (const userId of userIds) {
+				await orm(c).delete(loginLog).where(eq(loginLog.userId, userId)).run();
+				await orm(c).delete(userTotp).where(eq(userTotp.userId, userId)).run();
+				await orm(c).delete(userPasskey).where(eq(userPasskey.userId, userId)).run();
+				await orm(c).delete(userSecurity).where(eq(userSecurity.userId, userId)).run();
+				await c.env.kv.delete(KvConst.SESSION_META + userId);
+			}
+		} catch (e) {
+			console.error('物理删除附加清理失败:', e.message);
+		}
 		await auditLogService.record(c, {
 			action: 'user:physics-delete',
 			targetType: 'user',
