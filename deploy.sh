@@ -84,7 +84,7 @@ crons = ["0 * * * *"]
 [vars]
 ai_model = ""
 analysis_cache = true
-domain = "aevorynthtech.com"
+domain = "[\"aevorynthtech.com\"]"
 admin = "${ADMIN}"
 jwt_secret = "${JWT_SECRET}"
 project_link = "${PROJECT_LINK}"
