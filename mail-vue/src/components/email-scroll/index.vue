@@ -15,6 +15,9 @@
         <Icon v-perm="'email:delete'" class="icon delete" icon="uiw:delete" width="16" height="16"
               v-if="getSelectedMailsIds().length > 0"
               @click="handleDelete"/>
+        <Icon v-perm="'email:delete'" class="icon restore" icon="fluent:arrow-undo-20-regular" width="18" height="18"
+              v-if="props.type === 'trash' && getSelectedMailsIds().length > 0"
+              @click="handleRestore"/>
         <Icon v-perm="'email:delete'" class="icon delete" icon="fluent:mail-read-20-regular" width="21" height="21"
               v-if="getSelectedMailsIds().length > 0 && showUnread"
               @click="handleRead"/>
@@ -89,6 +92,21 @@
                           <Icon icon="mdi:lock" width="15" height="15" style="color: #67C23A" />
                         </el-tooltip>
                       </span>
+                      <span v-if="item.expired === 1" class="expire-tag" @click.stop>
+                        <el-tooltip effect="dark" :content="t('expireDestroyed')">
+                          <span style="color: #E6A23C">⏳ {{ t('expireDestroyedShort') }}</span>
+                        </el-tooltip>
+                      </span>
+                      <span v-else-if="item.burnAfterRead === 1" class="expire-tag" @click.stop>
+                        <el-tooltip effect="dark" :content="t('expireBurnTag')">
+                          <span style="color: #E6A23C">🔥 {{ t('expireBurnShort') }}</span>
+                        </el-tooltip>
+                      </span>
+                      <span v-else-if="item.expireAt" class="expire-tag" @click.stop>
+                        <el-tooltip effect="dark" :content="t('expireAtTag', { time: item.expireAt })">
+                          <span style="color: #E6A23C">⏳ {{ t('expireShort') }}</span>
+                        </el-tooltip>
+                      </span>
                       <span class="subject-text">
                         <slot name="subject" :email="item" >
                           <span v-html="item.subjectHtml"></span>
@@ -114,6 +132,9 @@
                 </div>
               </div>
               <div class="email-right" :style="showUserInfo ? 'align-self: start;':''">
+                <span v-if="aiEnabled && !item.e2ee" class="ai-quick-btn" :title="t('ai.assistantTitle')" @click.stop="openAiMenu($event, item)">
+                  <Icon icon="hugeicons:ai-chat-02" width="18" height="18"/>
+                </span>
                 <span class="email-time" :style="(item.unread === EmailUnreadEnum.UNREAD && showUnread) ? 'font-weight: bold' : ''">{{ item.formatCreateTime }}</span>
               </div>
             </div>
@@ -144,7 +165,17 @@
                        :showUserInfo="showUserInfo"
                        :type="type"/>
       <div class="empty" v-if="noLoading && emailList.length === 0 && !loading">
-        <el-empty :image-size="isMobile ? 120 : null" :description="$t('noMessagesFound')"/>
+        <el-empty :image-size="isMobile ? 120 : null">
+          <template #description>
+            <div class="empty-title">{{ emptyCopy.title }}</div>
+            <div class="empty-desc">{{ emptyCopy.desc }}</div>
+            <!-- Phase 8 斯诺登元素补齐：空状态名言轮换（核实过的三句，小字翻译走 i18n intro.quote1/2/3）。 -->
+            <transition name="empty-quote-fade" mode="out-in">
+              <div class="empty-quote" :key="emptyQuoteIndex">“{{ $t(EMPTY_QUOTES[emptyQuoteIndex]) }}” — Edward Snowden</div>
+            </transition>
+          </template>
+          <el-button type="primary" @click="onEmptyAction">{{ emptyCopy.action }}</el-button>
+        </el-empty>
       </div>
     </div>
     <el-dropdown
@@ -201,6 +232,31 @@
               </div>
             </template>
           </el-dropdown-item>
+          <!-- 列表 AI 快捷操作（与悬停 AI 按钮共用同一结果弹窗；加密邮件不进 AI）。 -->
+          <el-dropdown-item v-if="aiEnabled && ['email','star'].includes(props.type) && !rightClickEmail.e2ee" @click="aiQuickAction('summarize', rightClickEmail)">
+            <template #default>
+              <div class="right-dropdown-item">
+                <Icon icon="hugeicons:ai-chat-02" width="19" height="19"/>
+                <span>{{t('ai.summarize')}}</span>
+              </div>
+            </template>
+          </el-dropdown-item>
+          <el-dropdown-item v-if="aiEnabled && ['email','star'].includes(props.type) && !rightClickEmail.e2ee" @click="aiQuickAction('translate', rightClickEmail)">
+            <template #default>
+              <div class="right-dropdown-item">
+                <Icon icon="hugeicons:ai-chat-02" width="19" height="19"/>
+                <span>{{t('ai.translate')}}</span>
+              </div>
+            </template>
+          </el-dropdown-item>
+          <el-dropdown-item v-if="aiEnabled && ['email','star'].includes(props.type) && !rightClickEmail.e2ee" @click="aiQuickAction('triage', rightClickEmail)">
+            <template #default>
+              <div class="right-dropdown-item">
+                <Icon icon="hugeicons:ai-chat-02" width="19" height="19"/>
+                <span>{{t('ai.triage')}}</span>
+              </div>
+            </template>
+          </el-dropdown-item>
           <el-dropdown-item v-if="props.type === 'all-email'" @click="handleSearch('user', rightClickEmail.userEmail)">
             <template #default>
               <div class="right-dropdown-item">
@@ -225,6 +281,14 @@
               </div>
             </template>
           </el-dropdown-item>
+          <el-dropdown-item v-if="props.type === 'trash'" @click="rightRestore(rightClickEmail.emailId)">
+            <template #default>
+              <div class="right-dropdown-item">
+                <Icon icon="fluent:arrow-undo-20-regular" width="18" height="18" style="margin-left: 1px;margin-right: 3px" />
+                <span>{{t('trashRestore')}}</span>
+              </div>
+            </template>
+          </el-dropdown-item>
           <el-dropdown-item @click="rightDelete(rightClickEmail.emailId)">
             <template #default>
               <div class="right-dropdown-item">
@@ -236,6 +300,64 @@
         </el-dropdown-menu>
       </template>
     </el-dropdown>
+    <!-- 列表 AI 快捷菜单（行内悬停 AI 按钮打开；与右键菜单共用同一结果弹窗）。 -->
+    <el-dropdown
+        ref="aiDropdownRef"
+        :virtual-ref="aiTriggerRef"
+        :show-arrow="false"
+        virtual-triggering
+        trigger="click"
+        placement="bottom-start"
+    >
+      <template #dropdown>
+        <el-dropdown-menu>
+          <el-dropdown-item @click="aiQuickAction('summarize', aiMenuEmail)">
+            <template #default>
+              <div class="right-dropdown-item">
+                <Icon icon="hugeicons:ai-chat-02" width="19" height="19"/>
+                <span>{{t('ai.summarize')}}</span>
+              </div>
+            </template>
+          </el-dropdown-item>
+          <el-dropdown-item @click="aiQuickAction('translate', aiMenuEmail)">
+            <template #default>
+              <div class="right-dropdown-item">
+                <Icon icon="hugeicons:ai-chat-02" width="19" height="19"/>
+                <span>{{t('ai.translate')}}</span>
+              </div>
+            </template>
+          </el-dropdown-item>
+          <el-dropdown-item @click="aiQuickAction('triage', aiMenuEmail)">
+            <template #default>
+              <div class="right-dropdown-item">
+                <Icon icon="hugeicons:ai-chat-02" width="19" height="19"/>
+                <span>{{t('ai.triage')}}</span>
+              </div>
+            </template>
+          </el-dropdown-item>
+        </el-dropdown-menu>
+      </template>
+    </el-dropdown>
+    <!-- 列表 AI 结果弹窗（摘要/翻译/归类共用；归类带一键应用）。 -->
+    <el-dialog v-model="aiResultVisible" :title="aiResultTitle" width="520px" class="ai-list-result-dialog">
+      <div v-if="aiResultLoading" class="ai-result-body">{{ $t('ai.generating') }}</div>
+      <div v-else-if="aiResultKind === 'triage' && aiResultTriage" class="ai-result-body">
+        <div>
+          <el-tag v-for="label in aiResultTriage.labels" :key="label" size="small" style="margin-right: 6px">{{ label }}</el-tag>
+          <span v-if="!aiResultTriage.labels?.length">{{ $t('ai.triageNoLabel') }}</span>
+        </div>
+        <div>{{ $t('ai.triageFolder') }}：{{ aiResultTriage.folder }}</div>
+        <div v-if="aiResultTriage.reason">{{ aiResultTriage.reason }}</div>
+        <div class="ai-result-actions">
+          <span v-if="aiResultRemaining !== null" class="ai-result-remaining">{{ $t('ai.remaining', {count: aiResultRemaining}) }}</span>
+          <el-button type="primary" size="small" :loading="aiApplying" @click="applyListTriage">{{ $t('ai.applyTriage') }}</el-button>
+        </div>
+      </div>
+      <div v-else>
+        <pre class="ai-result-body">{{ aiResultText }}</pre>
+        <div v-if="aiResultRemaining !== null" class="ai-result-remaining">{{ $t('ai.remaining', {count: aiResultRemaining}) }}</div>
+      </div>
+    </el-dialog>
   </div>
 </template>
 
@@ -245,6 +367,7 @@ import skeletonBlock from "@/components/email-scroll/skeleton/index.vue"
 import {computed, onActivated, reactive, ref, watch, nextTick, onMounted, onUnmounted } from "vue";
 import {useEmailStore} from "@/store/email.js";
 import {useUiStore} from "@/store/ui.js";
+import router from "@/router/index.js";
 import {useSettingStore} from "@/store/setting.js";
 import {sleep} from "@/utils/time-utils.js"
 import {fromNow} from "@/utils/day.js";
@@ -252,10 +375,45 @@ import {useI18n} from "vue-i18n";
 import {EmailUnreadEnum} from "@/enums/email-enum.js";
 import { UseVirtualList } from '@vueuse/components'
 import { useScroll } from '@vueuse/core'
+import {aiSummarize, aiSummarizeStream, aiTranslate, aiTranslateStream, aiTriage, aiErrorI18nKey} from "@/request/ai.js";
+import {SUPPORTED_LOCALES} from "@/i18n/locale.js";
+import {hasMemoryKey} from "@/utils/e2ee.js";
+import {decryptSealedSender} from "@/utils/sealed-mail.js";
+
+// 斯诺登第二批（v3_15DB）：密封发件人列表展示。落盘记录没有明文发件人，列表先显示
+// 占位；E2EE 已解锁时用收件人自己的密钥解密出真实发件人（只在前端内存里）。
+// 缓存：emailId -> {email, name}（解出）或 null（已试过但解不出，不再重试）。
+const sealedSenderCache = new Map();
+const sealedSenderTrying = new Set();
+
+function sealedSenderDisplayName(email) {
+  const cached = sealedSenderCache.get(email.emailId);
+  if (cached) return cached.name || cached.email || t('sealedSenderPlaceholder');
+  return t('sealedSenderPlaceholder');
+}
+
+function tryDecryptSealedSenders(list) {
+  if (!hasMemoryKey()) return;
+  for (const email of list || []) {
+    if (!email?.sealedSender || Number(email.e2eeVer) !== 2) continue;
+    if (sealedSenderCache.has(email.emailId) || sealedSenderTrying.has(email.emailId)) continue;
+    sealedSenderTrying.add(email.emailId);
+    decryptSealedSender(email).then((sender) => {
+      sealedSenderCache.set(email.emailId, sender);
+      const row = emailList.find(e => e.emailId === email.emailId);
+      if (row) applyHighlight(row);
+    }).catch(() => {
+      sealedSenderCache.set(email.emailId, null);
+    }).finally(() => {
+      sealedSenderTrying.delete(email.emailId);
+    });
+  }
+}
 
 const props = defineProps({
   getEmailList: Function,
   emailDelete: Function,
+  emailRestore: Function,
   emailRead: Function,
   starAdd: Function,
   starCancel: Function,
@@ -313,6 +471,42 @@ const {t} = useI18n()
 const settingStore = useSettingStore()
 const uiStore = useUiStore();
 const emailStore = useEmailStore();
+
+// Phase 8 H 路：空状态按文件夹给引导（标题 + 一句说明 + 一个动作按钮），
+// 不再是只有一句“没有任何邮件”的空白页。
+const emptyCopy = computed(() => {
+  switch (props.type) {
+    case 'send':
+      return { title: t('emptySentTitle'), desc: t('emptySentDesc'), action: t('emptyComposeAction') };
+    case 'draft':
+      return { title: t('emptyDraftTitle'), desc: t('emptyDraftDesc'), action: t('emptyComposeAction') };
+    case 'star':
+      return { title: t('emptyStarredTitle'), desc: t('emptyStarredDesc'), action: t('emptyBrowseInboxAction') };
+    case 'all-email':
+      return { title: t('emptyAllTitle'), desc: t('emptyAllDesc'), action: t('emptyComposeAction') };
+    case 'spam':
+      return { title: t('emptySpamTitle'), desc: t('emptySpamDesc'), action: t('emptyBrowseInboxAction') };
+    default:
+      return { title: t('emptyInboxTitle'), desc: t('emptyInboxDesc'), action: t('emptyComposeAction') };
+  }
+});
+function onEmptyAction() {
+  if (props.type === 'star' || props.type === 'spam') router.push({ name: 'email' });
+  else uiStore.writerRef?.open?.();
+}
+// Phase 8 斯诺登元素补齐：空状态名言轮换（核实过的三句，小字翻译走 i18n
+// intro.quote1/2/3，每 6 秒换一句，淡入淡出）。
+const EMPTY_QUOTES = ['intro.quote1', 'intro.quote2', 'intro.quote3']
+const emptyQuoteIndex = ref(0)
+let emptyQuoteTimer = null
+onMounted(() => {
+  emptyQuoteTimer = setInterval(() => {
+    emptyQuoteIndex.value = (emptyQuoteIndex.value + 1) % EMPTY_QUOTES.length
+  }, 6000)
+})
+onUnmounted(() => {
+  if (emptyQuoteTimer) clearInterval(emptyQuoteTimer)
+})
 const loading = ref(false);
 const followLoading = ref(false);
 const noLoading = ref(false);
@@ -375,6 +569,8 @@ onActivated(() => {
     const index = scrollTop / itemHeight.value
     scrollbarRef.value?.scrollTo(index);
   })
+  // 回到列表时 E2EE 可能已在读信页解锁，补试一次密封发件人解密（不重新取数）。
+  tryDecryptSealedSenders(emailList)
 })
 
 onMounted(() => {
@@ -499,6 +695,7 @@ window.addEventListener('wheel', (event) => {
   if (dropdownShow.value) {
     dropdownRef.value.handleClose();
   }
+  aiDropdownRef.value?.handleClose();
 })
 
 function openReply(email) {
@@ -545,6 +742,124 @@ const handleContextmenu = (event, email) => {
 
   rightClickEmail.value = email;
   rightClickEmail.value.rightChecked = true
+}
+
+// 列表 AI 快捷操作：行内悬停 AI 按钮 / 右键菜单共用同一结果弹窗。
+// E2EE 邮件不进 AI（服务端只有密文），入口直接隐藏；与读信页 canAiSummarize 一致。
+const aiEnabled = computed(() => settingStore.settings?.aiEnabled !== 0)
+const aiTargetLang = computed(() => (SUPPORTED_LOCALES.find(i => i.short === settingStore.lang) || SUPPORTED_LOCALES[0]).code)
+const aiMenuEmail = ref({})
+const aiDropdownRef = ref(null)
+const aiPosition = ref(DOMRect.fromRect({x: 0, y: 0}))
+const aiTriggerRef = ref({
+  getBoundingClientRect() {
+    return aiPosition.value;
+  }
+})
+const aiResultVisible = ref(false)
+const aiResultKind = ref('summarize')
+const aiResultTitle = computed(() => aiResultKind.value === 'triage' ? t('ai.triageResult') : aiResultKind.value === 'translate' ? t('ai.translation') : t('ai.summary'))
+const aiResultLoading = ref(false)
+const aiResultText = ref('')
+const aiResultTriage = ref(null)
+const aiResultRemaining = ref(null)
+const aiApplying = ref(false)
+
+function openAiMenu(event, email) {
+  if (!aiEnabled.value || email?.e2ee === 1) return
+  aiMenuEmail.value = email
+  const rect = event.currentTarget.getBoundingClientRect()
+  aiPosition.value = DOMRect.fromRect({
+    x: rect.left,
+    y: rect.bottom + 4,
+  })
+  aiDropdownRef.value?.handleOpen()
+}
+
+async function aiQuickAction(kind, email) {
+  if (!email?.emailId || aiResultLoading.value) return
+  aiResultKind.value = kind
+  aiResultVisible.value = true
+  aiResultLoading.value = true
+  aiResultText.value = ''
+  aiResultTriage.value = null
+  try {
+    let data
+    if (kind === 'summarize') {
+      // 流式摘要：逐 token 填结果，首 token 约 1-2 秒可见；流式失败时回退一次性生成。
+      let live = ''
+      try {
+        const done = await aiSummarizeStream({emailId: email.emailId}, (d) => { live += d; aiResultText.value = live })
+        aiResultText.value = done.summary || live
+        data = done
+      } catch (e) {
+        data = await aiSummarize({emailId: email.emailId})
+        aiResultText.value = data.summary || ''
+      }
+    } else if (kind === 'translate') {
+      // 流式翻译：逐 token 填结果；流式失败时回退一次性生成。
+      let live = ''
+      try {
+        const done = await aiTranslateStream({emailId: email.emailId, targetLang: aiTargetLang.value}, (d) => { live += d; aiResultText.value = live })
+        aiResultText.value = done.translatedText || live
+        data = done
+      } catch (e) {
+        data = await aiTranslate({emailId: email.emailId, targetLang: aiTargetLang.value})
+        aiResultText.value = data.translatedText || ''
+      }
+    } else {
+      data = await aiTriage({emailId: email.emailId})
+      aiResultTriage.value = {labels: data.labels || [], folder: data.folder || 'inbox', reason: data.reason || ''}
+      aiMenuEmail.value = email
+    }
+    if (typeof data?.remaining === 'number') aiResultRemaining.value = data.remaining
+  } catch (e) {
+    aiResultVisible.value = false
+    ElMessage({message: t(aiErrorI18nKey(e && e.code)), type: 'error', plain: true})
+  } finally {
+    aiResultLoading.value = false
+  }
+}
+
+// 归类一键应用：星标/删除走现有接口；收件箱无需移动；归档只是
+// email_label 上的标签，无手动归档接口，不可应用，只提示。
+async function applyListTriage() {
+  const email = aiMenuEmail.value
+  const folder = aiResultTriage.value?.folder
+  if (!email?.emailId || !folder || aiApplying.value) return
+  if (folder === 'star') {
+    if (typeof props.starAdd !== 'function') return
+    aiApplying.value = true
+    try {
+      if (!email.isStar) {
+        await props.starAdd(email.emailId)
+        email.isStar = 1
+        props.starSuccess?.(email)
+      }
+      ElMessage({message: t('ai.triageApplied'), type: 'success', plain: true})
+      aiResultVisible.value = false
+    } catch (e) {
+      ElMessage({message: t('ai.unavailable'), type: 'error', plain: true})
+    } finally {
+      aiApplying.value = false
+    }
+  } else if (folder === 'trash') {
+    aiApplying.value = true
+    try {
+      await props.emailDelete([email.emailId])
+      emailStore.deleteIds = [email.emailId]
+      ElMessage({message: t('ai.triageApplied'), type: 'success', plain: true})
+      aiResultVisible.value = false
+    } catch (e) {
+      ElMessage({message: t('ai.unavailable'), type: 'error', plain: true})
+    } finally {
+      aiApplying.value = false
+    }
+  } else if (folder === 'inbox') {
+    ElMessage({message: t('ai.triageApplyInbox'), type: 'info', plain: true})
+  } else {
+    ElMessage({message: t('ai.triageApplyArchive'), type: 'info', plain: true})
+  }
 }
 
 function updateHasScrollbar() {
@@ -629,27 +944,33 @@ function localRead(emailIds) {
 }
 
 function rightDelete(emailId) {
-
-  if (props.type === 'all-email') {
-    ElMessageBox.confirm(t('delOneEmailConfirm'), {
-      confirmButtonText: t('confirm'),
-      cancelButtonText: t('cancel'),
-      type: 'warning'
-    }).then(() => {
-      props.emailDelete([emailId]).then(() => {
-        ElMessage({
-          message: t('delSuccessMsg'),
-          type: 'success',
-          plain: true
-        })
-        emailStore.deleteIds = [emailId];
+  // 单封删除一律二次确认（之前只有全部邮件视图弹确认，收件箱右键直接删）；
+  // 回收站里是彻底删除，文案单独提示“无法恢复”。
+  const confirmKey = props.type === 'trash' ? 'delOneTrashEmailConfirm' : 'delOneEmailConfirm'
+  ElMessageBox.confirm(t(confirmKey), {
+    confirmButtonText: t('confirm'),
+    cancelButtonText: t('cancel'),
+    type: 'warning'
+  }).then(() => {
+    props.emailDelete([emailId]).then(() => {
+      ElMessage({
+        message: t('delSuccessMsg'),
+        type: 'success',
+        plain: true
       })
+      emailStore.deleteIds = [emailId];
     })
-    return;
+  })
+}
+
+// 回收站右键恢复单封（恢复不删东西，不用二次确认）。
+function rightRestore(emailId) {
+  if (!props.emailRestore) {
+    return
   }
-  props.emailDelete([emailId]).then(() => {
+  props.emailRestore([emailId]).then(() => {
     ElMessage({
-      message: t('delSuccessMsg'),
+      message: t('trashRestoreSuccessMsg'),
       type: 'success',
       plain: true
     })
@@ -680,7 +1001,9 @@ async function copyCode(code) {
 }
 
 function handleDelete() {
-  ElMessageBox.confirm(t('delEmailsConfirm'), {
+  // 回收站里是彻底删除，文案单独提示“无法恢复”。
+  const confirmKey = props.type === 'trash' ? 'delTrashEmailsConfirm' : 'delEmailsConfirm'
+  ElMessageBox.confirm(t(confirmKey), {
     confirmButtonText: t('confirm'),
     cancelButtonText: t('cancel'),
     type: 'warning'
@@ -701,6 +1024,25 @@ function handleDelete() {
       })
       emailStore.deleteIds = emailIds;
     })
+  })
+}
+
+// 回收站恢复：选中的信移回收件箱（恢复不删东西，不用二次确认）。
+function handleRestore() {
+  if (!props.emailRestore) {
+    return
+  }
+  const emailIds = getSelectedMailsIds();
+  if (!emailIds.length) {
+    return
+  }
+  props.emailRestore(emailIds).then(() => {
+    ElMessage({
+      message: t('trashRestoreSuccessMsg'),
+      type: 'success',
+      plain: true
+    })
+    emailStore.deleteIds = emailIds;
   })
 }
 
@@ -898,10 +1240,13 @@ function handleList(list) {
     email.statusIcon = statusIconMap[email.status];
     applyHighlight(email);
   })
+  // 密封发件人：本批行加载完后，若 E2EE 已解锁，尝试解密出真实发件人。
+  tryDecryptSealedSenders(list);
 }
 
 function applyHighlight(email) {
-  email.nameHtml = renderHighlight(email.name);
+  // 密封发件人：显示解密出的真实发件人，未解锁时显示占位（不暴露明文）。
+  email.nameHtml = renderHighlight(email.sealedSender ? sealedSenderDisplayName(email) : email.name);
   email.subjectHtml = renderHighlight(email.subject);
   email.listHtml = renderHighlight(email.listText || email.text);
   email.userEmailHtml = renderHighlight(email.userEmail);
@@ -993,6 +1338,31 @@ function renderHighlight(value) {
     height: 100%;
     width: 100%;
   }
+
+  .empty-title {
+    font-size: 16px;
+    font-weight: 600;
+    color: var(--el-text-color-primary);
+  }
+
+  .empty-desc {
+    margin-top: 6px;
+    font-size: 14px;
+    color: var(--el-text-color-secondary);
+  }
+
+  /* Phase 8 斯诺登元素补齐：空状态名言——小字斜体，居中，克制 */
+  .empty-quote {
+    margin: 16px auto 0;
+    max-width: 420px;
+    font-size: 12px;
+    font-style: italic;
+    line-height: 1.6;
+    color: var(--el-text-color-placeholder);
+  }
+
+  .empty-quote-fade-enter-active, .empty-quote-fade-leave-active { transition: opacity .6s ease; }
+  .empty-quote-fade-enter-from, .empty-quote-fade-leave-to { opacity: 0; }
 
   .noLoading {
     display: flex;
@@ -1285,6 +1655,28 @@ function renderHighlight(value) {
     }
   }
 
+  // 列表 AI 快捷按钮：平时隐藏，行悬停时出现（只在桌面端，移动端走读信页 AI 按钮）。
+  .ai-quick-btn {
+    display: none;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 4px;
+    cursor: pointer;
+    color: var(--el-text-color-secondary);
+    margin-right: 4px;
+
+    &:hover {
+      background: var(--base-fill);
+      color: var(--el-color-primary);
+    }
+  }
+
+  &:hover .ai-quick-btn {
+    display: flex;
+  }
+
   .email-right-skeleton {
     @media (max-width: 1366px) {
       display: none;
@@ -1430,6 +1822,29 @@ ul {
   list-style: none;
   padding: 0;
   margin: 0;
+}
+
+// 列表 AI 结果弹窗。
+.ai-result-body {
+  font-family: inherit;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+  line-height: 1.6;
+  font-size: 13px;
+}
+
+.ai-result-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-top: 12px;
+}
+
+.ai-result-remaining {
+  font-size: 12px;
+  color: var(--secondary-text-color);
+  flex: 1;
 }
 
 </style>

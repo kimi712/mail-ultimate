@@ -35,6 +35,43 @@ const registerLogService = {
 		}
 	},
 
+	// 并发占位（修先查后写竞态）：单条原子 INSERT，仅当窗口内 SUCCESS+RESERVED
+	// 计数 < limit 时才插入一行 result=RESERVED，返回其 log_id；否则返回 null。
+	// SQLite 单条语句原子执行，并发请求无法同时通过检查，从根本上堵住
+	// “同一秒连建 10 个号”绕过 3/24h 限额的漏洞。
+	async reserveSlot(c, { ip = '', ipSegment = '', email = '', limit = 3, windowHours = 24 }) {
+		try {
+			const res = await c.env.db.prepare(
+				`INSERT INTO register_log (ip, ip_segment, email, result, create_time)
+				 SELECT ?, ?, ?, ?, datetime('now')
+				 WHERE (SELECT COUNT(*) FROM register_log WHERE ip_segment = ? AND result IN (0, 2) AND create_time >= datetime('now', ?)) < ?`
+			).bind(
+				await maybeMaskIp(c, ip), ipSegment, email || '',
+				registerLogConst.result.RESERVED,
+				ipSegment, `-${windowHours} hours`, limit
+			).run();
+			if (!res.meta || res.meta.changes === 0) return null;
+			if (res.meta.last_row_id) return res.meta.last_row_id;
+			// 兜底：取刚插入的占位行
+			const row = await c.env.db.prepare(
+				`SELECT log_id FROM register_log WHERE ip_segment = ? AND email = ? AND result = 2 ORDER BY log_id DESC LIMIT 1`
+			).bind(ipSegment, email || '').first();
+			return row?.log_id ?? null;
+		} catch (e) {
+			console.error('注册占位失败:', e.message);
+			return null;
+		}
+	},
+
+	// 把占位行收尾为最终结果（成功/失败），不另插新行，避免计数窗口抖动。
+	async updateResult(c, logId, { result, failReason = '' }) {
+		try {
+			await orm(c).update(registerLog).set({ result, failReason }).where(eq(registerLog.logId, logId)).run();
+		} catch (e) {
+			console.error('更新注册日志失败:', e.message);
+		}
+	},
+
 	async countSuccessBySegment(c, ipSegment, hours) {
 		try {
 			const row = await orm(c).select({ n: count() }).from(registerLog).where(and(

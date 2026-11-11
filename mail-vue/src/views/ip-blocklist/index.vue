@@ -26,7 +26,7 @@
         <el-table-column prop="reason" :label="$t('reason')" min-width="180" show-overflow-tooltip/>
         <el-table-column :label="$t('expireTime')" min-width="170">
           <template #default="props">
-            {{ props.row.expireTime ? tzDayjs(props.row.expireTime).format('YYYY-MM-DD HH:mm') : $t('permanent') }}
+            <span :title="props.row.expireTime ? formatFullWithTimeZone(props.row.expireTime) : ''">{{ props.row.expireTime ? formatDateTime(props.row.expireTime) : $t('permanent') }}</span>
           </template>
         </el-table-column>
         <el-table-column prop="createdBy" :label="$t('createdBy')" min-width="160" show-overflow-tooltip/>
@@ -71,7 +71,7 @@ import {defineOptions, reactive, ref} from 'vue'
 import {ipBlocklistList, ipBlocklistAdd, ipBlocklistDelete} from '@/request/ip-blocklist.js'
 import {Icon} from "@iconify/vue";
 import loading from "@/components/loading/index.vue";
-import {tzDayjs} from "@/utils/day.js";
+import { formatDateTime, formatFullWithTimeZone } from "@/utils/datetime.js";
 import {useI18n} from 'vue-i18n';
 
 defineOptions({

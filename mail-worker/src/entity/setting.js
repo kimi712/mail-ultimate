@@ -69,6 +69,11 @@ export const setting = sqliteTable('setting', {
 	webhookRetry: integer('webhook_retry').default(0).notNull(),
 	webhookSecret: text('webhook_secret').default('').notNull(),
 	// Phase 1：防刷配置（D1 列由 init.js v3_5DB 建；默认值与契约 §1 一致）
+	// Phase 8 B：登录限流阈值（D1 列由 init.js v3_11DB 建；默认值与代码兜底一致）
+	loginRateLimitWindowMin: integer('login_rate_limit_window_min').default(15).notNull(),
+	loginRateLimitIpMax: integer('login_rate_limit_ip_max').default(5).notNull(),
+	loginRateLimitAcctMax: integer('login_rate_limit_acct_max').default(5).notNull(),
+	loginRateLimitLockBaseMin: integer('login_rate_limit_lock_base_min').default(5).notNull(),
 	ipRegLimit: integer('ip_reg_limit').default(3).notNull(),
 	ipRegWindowHours: integer('ip_reg_window_hours').default(24).notNull(),
 	regRateLimitPerMin: integer('reg_rate_limit_per_min').default(5).notNull(),
@@ -83,6 +88,12 @@ export const setting = sqliteTable('setting', {
 	logIpMask: integer('log_ip_mask').default(0).notNull(),
 	// Phase 7：AI 写信/回信/摘要总开关（直白布尔语义：1 = 开启（默认），0 = 关闭；
 	// 注意与站内多数 0=OPEN / 1=CLOSE 的反向开关不同，读写时不要套用旧约定）
-	aiEnabled: integer('ai_enabled').default(1).notNull()
+	aiEnabled: integer('ai_enabled').default(1).notNull(),
+	// 用户自助绑定 Telegram：用户 TG 推送总开关（0=OPEN 开启（默认），1=CLOSE 关闭；
+	// 关了只停用户推送，站长 tgBot 转发与 sendAlert 告警不受影响）。
+	tgUserPush: integer('tg_user_push').default(0).notNull(),
+	// 金丝雀声明日期（v3_14DB）：安全中心“截至某日未收到秘密传唤”的日期（YYYY-MM-DD），
+	// 默认部署当天，管理员在系统设置里改。
+	canaryDate: text('canary_date').notNull().default('2026-11-09')
 });
 export default setting

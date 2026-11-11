@@ -12,6 +12,7 @@ import userContext from '../security/user-context';
 import domainUtils from '../utils/domain-uitls';
 import auditLogService from './audit-log-service';
 import fieldCrypto from '../utils/field-crypto';
+import { checkFieldEncKey } from '../kernel/secrets';
 
 // Phase 6：应用层加密字段（契约 §1.5）。resendTokens 是整段 JSON 字符串，单独处理。
 const ENCRYPTED_SETTING_FIELDS = ['secretKey', 'tgBotToken', 's3SecretKey', 's3AccessKey', 'githubClientSecret', 'googleClientSecret', 'linuxdoClientSecret', 'webhookSecret'];
@@ -28,11 +29,50 @@ const settingService = {
 			}
 		}
 		const rawTokens = await fieldCrypto.decrypt(c, settingRow.resendTokens);
+		// Phase 8 §8.1 防呆：解密失败永不静默降级为空。
+		// decrypt 失败原样返回密文原文的兼容行为保留，但调用方必须处理
+		// “返回了密文原文”这一情况：JSON.parse 失败时保留 KV 中上一次的
+		// 好值（而不是置空 {}），并写 alert_log + TG 告警（若已配）。
+		// 根因：线上曾跑 dummy field_enc_key，解密失败、refresh() 静默把
+		// KV 写成 {}，发信报“发信服务未配置”。
+		if (fieldCrypto.isEncrypted(settingRow.resendTokens)) {
+			const keyCheck = checkFieldEncKey(c);
+			if (!keyCheck.ok) {
+				console.error(`field_enc_key 校验失败 (${keyCheck.code})：${keyCheck.message}；resendTokens 解密不可信，KV 将保留上一次的好值`);
+			}
+		}
+		let tokensOk = false;
 		try {
-			settingRow.resendTokens = JSON.parse(rawTokens || '{}');
+			const parsed = JSON.parse(rawTokens || '{}');
+			if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+				settingRow.resendTokens = parsed;
+				tokensOk = true;
+			} else {
+				throw new Error('resendTokens 不是 JSON 对象');
+			}
 		} catch (e) {
-			console.error('解析 resendTokens 失败，使用空对象:', e.message);
-			settingRow.resendTokens = {};
+			console.error('解析 resendTokens 失败，保留 KV 中上一次的好值:', e.message);
+		}
+		if (!tokensOk) {
+			let prevTokens = null;
+			try {
+				const prev = await c.env.kv.get(KvConst.SETTING, { type: 'json' });
+				if (prev && prev.resendTokens && typeof prev.resendTokens === 'object' && !Array.isArray(prev.resendTokens)) {
+					prevTokens = prev.resendTokens;
+				}
+			} catch (e) {
+				console.error('读取 KV 旧 resendTokens 失败:', e.message);
+			}
+			// 无上一次好值时才回落为空对象（首次初始化且 D1 无有效值）；有旧值必保留。
+			settingRow.resendTokens = prevTokens ?? {};
+			// 告警：sendAlert 先写 alert_log 再发 TG（若已配），永不抛错；
+			// 动态 import 避免与 telegram-service 的静态循环依赖。
+			try {
+				const { default: telegramService } = await import('./telegram-service.js');
+				await telegramService.sendAlert(c, 'resendTokens 解密/解析失败，已保留 KV 中上一次的好值，未置空；请检查 field_enc_key 是否为真实 wrangler secret', 'system');
+			} catch (e) {
+				console.error('发送 resendTokens 告警失败:', e.message);
+			}
 		}
 		settingRow.r2Domain = '';
 		c.set('setting', settingRow);

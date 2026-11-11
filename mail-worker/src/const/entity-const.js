@@ -112,6 +112,10 @@ export const settingConst = {
 		OPEN: 0,
 		CLOSE: 1,
 	},
+	tgUserPush: {
+		OPEN: 0,
+		CLOSE: 1,
+	},
 	webhookStatus: {
 		OPEN: 0,
 		CLOSE: 1,
@@ -167,7 +171,11 @@ export const ipBlocklistConst = {
 export const registerLogConst = {
 	result: {
 		SUCCESS: 0,
-		FAIL: 1
+		FAIL: 1,
+		// 并发占位：先查后写有竞态，同一秒多请求会同时通过限额检查。
+		// reserveSlot 用单条原子 INSERT 先占位（result=2），成功数统计只认 SUCCESS，
+		// 尝试数统计认全部行，故占位行计入分钟尝试、不计入 24h 成功数；外层收尾时 UPDATE 改为 SUCCESS/FAIL。
+		RESERVED: 2
 	}
 }
 

@@ -12,10 +12,16 @@ import turnstileService from './turnstile-service';
 import roleService from './role-service';
 import { t } from '../i18n/i18n';
 import verifyRecordService from './verify-record-service';
+import userContext from '../security/user-context';
 
 const accountService = {
 
 	async add(c, params, userId) {
+
+		// 诱饵会话（v3_16DB）：拒绝加账号（不动真实账号）。
+		if (userContext.isDecoy(c)) {
+			throw new BizError(t('addAccountDisabled'));
+		}
 
 		const { addEmailVerify , addEmail, manyEmail, addVerifyCount, minEmailPrefix, emailPrefixFilter } = await settingService.query(c);
 
@@ -131,6 +137,18 @@ const accountService = {
 			lastSort = 9999999999;
 		}
 
+		// 诱饵会话（v3_16DB）：只返回主账号（登录邮箱），不透露用户加的其他账号。
+		if (userContext.isDecoy(c)) {
+			const primaryEmail = String(userContext.getUser(c)?.email || '').toLowerCase();
+			return orm(c).select().from(account).where(
+				and(
+					eq(account.userId, userId),
+					eq(account.isDel, isDel.NORMAL),
+					sql`${account.email} COLLATE NOCASE = ${primaryEmail}`
+				)
+			).all();
+		}
+
 		return orm(c).select().from(account).where(
 			and(
 				eq(account.userId, userId),
@@ -149,6 +167,11 @@ const accountService = {
 	},
 
 	async delete(c, params, userId) {
+
+		// 诱饵会话（v3_16DB）：拒绝删账号（不动真实账号）。
+		if (userContext.isDecoy(c)) {
+			throw new BizError(t('delMyAccount'));
+		}
 
 		let { accountId } = params;
 
@@ -224,6 +247,10 @@ const accountService = {
 	},
 
 	async setName(c, params, userId) {
+		// 诱饵会话（v3_16DB）：假装改名成功，实际不动真实账号。
+		if (userContext.isDecoy(c)) {
+			return;
+		}
 		const { name, accountId } = params
 		if (name.length > 30) {
 			throw new BizError(t('usernameLengthLimit'));
@@ -261,6 +288,10 @@ const accountService = {
 	},
 
 	async setAllReceive(c, params, userId) {
+		// 诱饵会话（v3_16DB）：假装成功，实际不动真实账号。
+		if (userContext.isDecoy(c)) {
+			return;
+		}
 		let a = null
 		const { accountId } = params;
 		const accountRow = await this.selectById(c, accountId);
@@ -272,6 +303,10 @@ const accountService = {
 	},
 
 	async setAsTop(c, params, userId) {
+		// 诱饵会话（v3_16DB）：假装成功，实际不动真实账号。
+		if (userContext.isDecoy(c)) {
+			return;
+		}
 		const { accountId } = params;
 		const userRow = await userService.selectById(c, userId);
 		const mainAccountRow = await accountService.selectByEmailIncludeDel(c, userRow.email);

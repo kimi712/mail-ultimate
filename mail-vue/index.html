@@ -9,6 +9,15 @@
   <link rel="icon" href="/public/mail.png" type="image/png">
   <script src="https://challenges.cloudflare.com/turnstile/v0/api.js" async defer></script>
   <script>
+    // 斯诺登视角：html lang 必须跟界面语言一致，否则 Chrome 会弹“翻译网页吗？”
+    // 把页面发给谷歌翻译——既打扰用户，也是不必要的隐私外泄。语言存在 mail-locale，
+    // 存的是完整码（zh-CN / en …），没有时默认 zh-CN；切换语言时 locale.js 会同步改。
+    try {
+      var storedLang = localStorage.getItem('mail-locale') || 'zh-CN'
+      document.documentElement.lang = storedLang
+    } catch (e) {
+      document.documentElement.lang = 'zh-CN'
+    }
     const uiStoreStr =  localStorage.getItem('ui')
     let isDark = false
     if (uiStoreStr) {

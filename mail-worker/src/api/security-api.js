@@ -10,10 +10,13 @@ import userSecurityService from '../service/user-security-service';
 import userService from '../service/user-service';
 
 // ---- TOTP ----
+// Phase 8 B：换绑（已启用 TOTP 时重开 setup）须传旧码 oldCode 验旧码；
+// setup 返回 {secret, otpauthUrl, qr}，qr 为本地编码的二维码矩阵（不调外部 API）。
 app.post('/my/totp/setup', async (c) => {
 	const userId = userContext.getUserId(c);
 	const userRow = await userService.selectById(c, userId);
-	const data = await totpService.setup(c, userId, userRow.email);
+	const body = await c.req.json().catch(() => ({}));
+	const data = await totpService.setup(c, userId, userRow.email, body.oldCode);
 	return c.json(result.ok(data));
 });
 
@@ -87,5 +90,26 @@ app.get('/my/security', async (c) => {
 app.post('/my/security', async (c) => {
 	const body = await c.req.json();
 	const data = await userSecurityService.set(c, userContext.getUserId(c), body);
+	return c.json(result.ok(data));
+});
+
+// ---- 抗量子（v3_15DB）：ML-KEM-768 密钥对 ----
+// 公钥可公开（发件方按收件地址取，用来包裹一次性密钥 CEK）；加密私钥只返回给
+// 本人（服务端无法解密，取回后由前端用 KEK 解密再解封 CEK）。
+app.get('/my/security/mlkem-pubkey', async (c) => {
+	const email = String(c.req.query('email') || '').trim();
+	if (!email) return c.json(result.ok({ publicKey: '' }));
+	const publicKey = await userSecurityService.getMlkemPublicKeyByEmail(c, email);
+	return c.json(result.ok({ publicKey }));
+});
+
+app.get('/my/security/mlkem-private', async (c) => {
+	const privEnc = await userSecurityService.getMlkemPrivEnc(c, userContext.getUserId(c));
+	return c.json(result.ok({ privEnc }));
+});
+
+app.post('/my/security/mlkem-keys', async (c) => {
+	const body = await c.req.json().catch(() => ({}));
+	const data = await userSecurityService.setMlkemKeys(c, userContext.getUserId(c), body);
 	return c.json(result.ok(data));
 });

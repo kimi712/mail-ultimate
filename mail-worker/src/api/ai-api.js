@@ -10,16 +10,39 @@ import userContext from '../security/user-context';
 // （ai_disabled / ai_quota_exceeded / ai_unavailable / ai_invalid_input /
 // ai_not_found），前端按 body.code 查 ai.* 翻译 key 展示。
 app.post('/ai/compose', async (c) => {
-	const data = await aiService.compose(c, userContext.getUserId(c), await c.req.json().catch(() => ({})));
+	const body = await c.req.json().catch(() => ({}));
+	// stream: true 时返回 SSE 流式响应（逐 token），否则一次性 JSON。
+	// 流式调用的业务错误（配额/输入非法等）在建流前抛出，走 Hono onError 返回标准 JSON 错误，前端按 content-type 区分。
+	if (body.stream) {
+		return aiService.composeStream(c, userContext.getUserId(c), body);
+	}
+	const data = await aiService.compose(c, userContext.getUserId(c), body);
 	return c.json(result.ok(data));
 });
 
 app.post('/ai/reply', async (c) => {
-	const data = await aiService.reply(c, userContext.getUserId(c), await c.req.json().catch(() => ({})));
+	const body = await c.req.json().catch(() => ({}));
+	if (body.stream) {
+		return aiService.replyStream(c, userContext.getUserId(c), body);
+	}
+	const data = await aiService.reply(c, userContext.getUserId(c), body);
 	return c.json(result.ok(data));
 });
 
 app.post('/ai/summarize', async (c) => {
-	const data = await aiService.summarize(c, userContext.getUserId(c), await c.req.json().catch(() => ({})));
+	const body = await c.req.json().catch(() => ({}));
+	// stream: true 时返回 SSE 流式响应（逐 token），否则一次性 JSON。
+	// 与 /ai/compose 同一约定：流式调用的业务错误在建流前抛出，走 onError 返回标准 JSON。
+	if (body.stream) {
+		return aiService.summarizeStream(c, userContext.getUserId(c), body);
+	}
+	const data = await aiService.summarize(c, userContext.getUserId(c), body);
+	return c.json(result.ok(data));
+});
+
+// AI 用量查询（顶栏额度展示用）：只读当日计数，不调模型、不计次数、
+// 不受 aiEnabled 开关影响（开关关闭时顶栏入口隐藏，前端也不会调它）。
+app.get('/ai/usage', async (c) => {
+	const data = await aiService._getUsage(c, userContext.getUserId(c));
 	return c.json(result.ok(data));
 });

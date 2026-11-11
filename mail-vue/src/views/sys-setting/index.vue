@@ -31,7 +31,7 @@
                       @change="change"
                       :style="`width: ${ locale === 'en' ?  100 : 80 }px;`"
                       v-model="setting.regKey"
-                      placeholder="Select"
+                      :placeholder="$t('select')"
                   >
                     <el-option
                         v-for="item in regKeyOptions"
@@ -158,7 +158,7 @@
                       @change="change"
                       :style="`width: ${ locale === 'en' ? 100 : 80 }px;`"
                       v-model="setting.autoRefresh"
-                      placeholder="Select"
+                      :placeholder="$t('select')"
                   >
                     <el-option
                         v-for="item in authRefreshOptions"
@@ -314,7 +314,7 @@
                       @change="change"
                       :style="`width: ${ locale === 'en' ? 100 : 80 }px;`"
                       v-model="setting.registerVerify"
-                      placeholder="Select"
+                      :placeholder="$t('select')"
                       class="bot-verify-select"
                   >
                     <el-option key="1" :value="0" :label="$t('enable')"/>
@@ -333,7 +333,7 @@
                       @change="change"
                       :style="`width: ${ locale === 'en' ? 100 : 80 }px;`"
                       v-model="setting.addEmailVerify"
-                      placeholder="Select"
+                      :placeholder="$t('select')"
                       class="bot-verify-select"
                   >
                     <el-option key="1" :value="0" :label="$t('enable')"/>
@@ -381,6 +381,18 @@
                   <el-button class="opt-button" size="small" type="primary" @click="openNoticePopup">
                     <Icon icon="mynaui:click-solid" width="18" height="18"/>
                   </el-button>
+                </div>
+              </div>
+              <!-- 金丝雀声明日期：安全中心“截至某日未收到秘密传唤”的日期，管理员维护。 -->
+              <div class="setting-item">
+                <div>
+                  <span>{{ $t('canaryDate') }}</span>
+                  <el-tooltip effect="dark" :content="$t('canaryDateDesc')">
+                    <Icon class="warning" icon="fe:warning" width="18" height="18"/>
+                  </el-tooltip>
+                </div>
+                <div class="forward">
+                  <el-input v-model="setting.canaryDate" placeholder="2026-11-09" style="width: 150px" @change="saveCanaryDate" />
                 </div>
               </div>
             </div>
@@ -506,7 +518,7 @@
       </el-dialog>
       <el-dialog v-model="resendTokenFormShow" :title="$t('resendToken')" width="340" @closed="cleanResendTokenForm">
         <form @submit.prevent>
-          <el-select style="margin-bottom: 15px" v-model="resendTokenForm.domain" placeholder="Select">
+          <el-select style="margin-bottom: 15px" v-model="resendTokenForm.domain" :placeholder="$t('select')">
             <el-option
                 v-for="item in settingStore.domainList"
                 :key="item"
@@ -626,9 +638,18 @@
               />
             </el-select>
           </div>
+          <div class="tg-msg-label">
+            <span>{{t('tgUserPush')}}</span>
+            <el-switch v-model="tgUserPush" :active-value="0" :inactive-value="1" :active-text="$t('enable')"
+                       :inactive-text="$t('disable')"/>
+          </div>
+          <div class="recovery-desc" style="font-size: 12px; color: var(--regular-text-color); line-height: 1.6">{{t('tgUserPushDesc')}}</div>
         </div>
         <template #footer>
           <div class="dialog-footer">
+            <el-button :loading="tgWebhookLoading" @click="onSetTgWebhook">
+              {{ $t('tgUserWebhookSet') }}
+            </el-button>
             <el-switch v-model="tgBotStatus" :active-value="0" :inactive-value="1" :active-text="$t('enable')"
                        :inactive-text="$t('disable')"/>
             <el-button :loading="settingLoading" type="primary" @click="tgBotSave">
@@ -928,7 +949,7 @@ Authorization: &lt;secret&gt;</pre>
 
 <script setup>
 import {computed, defineOptions, nextTick, reactive, ref} from "vue";
-import {deleteBackground, setBackground, setBlackList, settingQuery, settingSet} from "@/request/setting.js";
+import {deleteBackground, setBackground, setBlackList, settingQuery, settingSet, setTelegramWebhook} from "@/request/setting.js";
 import {useSettingStore} from "@/store/setting.js";
 import {useUiStore} from "@/store/ui.js";
 import {useUserStore} from "@/store/user.js";
@@ -1061,6 +1082,8 @@ const tgChatId = ref([])
 const customDomain = ref('')
 const tgBotStatus = ref(0)
 const tgBotToken = ref('')
+const tgUserPush = ref(0)
+const tgWebhookLoading = ref(false)
 const forwardEmail = ref([])
 const forwardStatus = ref(0)
 const webhookUrl = ref('')
@@ -1211,6 +1234,7 @@ function closedSetBackground() {
 
 function openTgSetting() {
   tgBotStatus.value = setting.value.tgBotStatus
+  tgUserPush.value = setting.value.tgUserPush ?? 0
   tgBotToken.value = ''
   customDomain.value = setting.value.customDomain
   tgMsgFrom.value = setting.value.tgMsgFrom
@@ -1370,6 +1394,7 @@ function tgBotSave() {
   const form = {
     customDomain: customDomain.value,
     tgBotStatus: tgBotStatus.value,
+    tgUserPush: tgUserPush.value,
     tgChatId: tgChatId.value + '',
     tgMsgFrom: tgMsgFrom.value,
     tgMsgText: tgMsgText.value,
@@ -1377,6 +1402,27 @@ function tgBotSave() {
   }
   if (tgBotToken.value) form.tgBotToken = tgBotToken.value
   editSetting(form)
+}
+
+// 把 Telegram webhook 指到本站域名（用户绑定入口 /api/telegram/webhook）。
+function onSetTgWebhook() {
+  if (tgWebhookLoading.value) return
+  tgWebhookLoading.value = true
+  setTelegramWebhook().then(data => {
+    ElMessage({
+      message: t('tgUserWebhookDone') + (data?.url ? `：${data.url}` : ''),
+      type: 'success',
+      plain: true,
+    })
+  }).catch(err => {
+    ElMessage({
+      message: err?.message || 'error',
+      type: 'error',
+      plain: true,
+    })
+  }).finally(() => {
+    tgWebhookLoading.value = false
+  })
 }
 
 function forwardEmailSave() {
@@ -1687,6 +1733,17 @@ function changeField(key, value) {
   if (!settingReady.value) return
   setting.value[key] = value
   editSetting({[key]: value}, false)
+}
+
+// 金丝雀声明日期：只接受 YYYY-MM-DD，格式不对不保存。
+function saveCanaryDate() {
+  if (!settingReady.value) return
+  const v = String(setting.value.canaryDate || '').trim()
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(v)) {
+    ElMessage({ message: t('canaryDateInvalid'), type: 'error', plain: true })
+    return
+  }
+  editSetting({ canaryDate: v }, false)
 }
 
 function saveTitle() {

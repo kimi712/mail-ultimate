@@ -10,7 +10,7 @@
 - [ ] 前端构建通过：`mail-vue` 下 `npm run build`（见 §5 说明：本机用 npm，不用 pnpm）。
 - [ ] `PHASE2-4.md` §5 与 `PHASE5-6.md` §7 回归清单逐项打勾；已知问题清单为空（零已知 bug 方可交付，用户 2026-11-08 13:07 定）。
 - [ ] `jwt_secret` 已重新生成（§3），**绝不复用老站的 jwt_secret**。
-- [ ] `FIELD_ENC_KEY` 已生成并填入 `.deploy.env`（§3，第六阶段字段加密用；**不与 `jwt_secret` 复用**；不填则敏感字段存明文）。
+- [ ] `FIELD_ENC_KEY` 已生成并填入 `.deploy.env`（§3 与 §3.1，第六阶段字段加密用；**不与 `jwt_secret` 复用**；部署时由 `deploy.sh` 以 wrangler secret 形式设置，**绝不写进 `wrangler.deploy.toml` 的 `[vars]`**）。
 - [ ] `.deploy.env` 已按 `.deploy.env.example` 填好，且**未提交进 Git**（`.gitignore` 已忽略）。
 - [ ] Cloudflare 账号已登录：`npx wrangler login`（或 `CLOUDFLARE_API_TOKEN` 环境变量，权限需含 Workers/D1/KV/R2/Email/Zone 编辑）。
 - [ ] 域名 aevorynthtech.com 已在该 Cloudflare 账号下托管（DNS 由 CF 接管）。
@@ -103,6 +103,35 @@ npx wrangler r2 bucket create mail-ultimate
 
 > ⚠️ 老站的 `jwt_secret`、Turnstile Secret Key、Resend token、CF API Token 一律不复用；`.deploy.env` 与生成的 `wrangler.deploy.toml` 都已加入 `.gitignore`，**绝不提交进 Git**。
 
+### 3.1 field_enc_key 密钥管理（Phase 8 §8.1，根因 ① 的架构级根治）
+
+> **根因**：部署脚本曾经从来没设过 `field_enc_key`，线上跑的是 `wrangler.jsonc` 里的 dummy 值（`phase56-local-test-only-not-a-real-secret`），而 D1 里用真密钥加密的 Resend Token 解密失败、`settingService.refresh()` 静默地把 KV 写成空，发信报“发信服务未配置”。2026-11-08 父代理手工补设 secret 并重部署 + `/init` 才修好。以下机制保证它在架构层面不再复发，不再靠手工补。
+
+- **`field_enc_key` 必须是 wrangler secret**：唯一合法来源是 `.deploy.env` 的 `FIELD_ENC_KEY`（`openssl rand -hex 32` 现场生成，与 `jwt_secret` 绝不复用）。**禁止**写进 `wrangler.jsonc` / `wrangler.deploy.toml` 的 `[vars]`、禁止写进代码、测试与文档；secret 与 vars 同名时 secret 优先，但明文 vars 是泄漏面，必须杜绝。
+- **`deploy.sh` 每次部署都设置它**：部署流程第 3 步从 `.deploy.env` 执行 `wrangler secret put field_enc_key`（值只经 stdin 传入，脚本任何地方不打印、不写日志；须在 `mail-worker` 目录下用 `--config wrangler.deploy.toml` 跑，直接在仓库根目录跑会报 Worker name missing）。幂等，可重复部署。
+- **部署时校验三项，任一失败即停部署**：
+  1. `.deploy.env` 的 `FIELD_ENC_KEY` 长度 ≥ 32，且不等于本地测试 dummy 值；
+  2. `wrangler secret list` 含 `field_enc_key`（确认 secret 真的落到了线上 Worker）；
+  3. 生成的 `wrangler.deploy.toml` 不得含 `field_enc_key` 的 `[vars]` 明文值（grep 防呆）。
+- **代码层防呆（解密失败永不静默降级）**：
+  - 启动校验：`mail-worker/src/kernel/secrets.js`（Layer 1）判断运行时 `field_enc_key` 是否真实可用（非空、非 dummy、长度达标），校验失败返回明确的错误码（`field_enc_key_missing` / `field_enc_key_too_short` / `field_enc_key_dummy`），不带病运行、不静默。
+  - `setting-service.js` 的 `refresh()`：`resendTokens` 解密/解析失败时，保留 KV 中上一次的好值并写 `alert_log`（`type='system'`，若已配 TG 则 `telegramService.sendAlert` 另发 TG 告警），**绝不得把 KV 写成 `{}`**；`fieldCrypto.decrypt` 失败原样返回、不抛错的兼容行为保留，但调用方必须处理“返回了密文原文”这一情况（JSON.parse 失败时保留旧值，而不是置空）。无上一次好值时（首次初始化且 D1 无有效值）才回落为空对象，同样写告警。
+  - 管理后台设置页显示密钥状态告警（不展示密钥值）——见 `PHASE8-DESIGN.md` §8.1，由总协调在集成时确认入口。
+- **部署后必查**：见 §6 新增必查项（KV 的 `setting:` 缓存里 `resendTokens` 含发件域名 + 新注册测试账号能发站外信）。
+
+### 3.2 默认角色与发信限额（Phase 8 §8.2，根因 ② 的正式产品决策）
+
+> **根因**：默认角色（普通用户，`role_id=1`）的 `send_type` 原来是 `ban`，普通用户根本发不了信。2026-11-08 父代理临时改成每天 50 封。以下是正式产品决策，不再是临时改动。
+
+| 角色 | 发信限额 | 说明 |
+|---|---|---|
+| 普通用户（`role_id=1`，默认角色） | `send_type='day'`，`send_count=50` | 每天 50 封**站外信**；站内信不受此限（与现有 `sendInternal` 行为一致） |
+| 管理员 | 不限 | 现有行为不变 |
+
+- **依据**：50/天/人是防滥用底线（防注册机群发），与通道配额是两回事，不冲突——Resend 备用通道日预算已由用户定为 999999（2026-11-08 取消 100/天限制，见 MEMORY），CF 主通道 3000 封/月（Workers Paid 含）。50/天既防群发，又不影响正常用户。
+- **落地**：`init.js` 种子已改为 `send_type='day'`、`send_count=50`；迁移 `v3_11DB` 只修 `send_type='ban'` 的旧行（`WHERE role_id=1 AND send_type='ban'`），管理员已 deliberate 改过的值（day/100、count 等）一律不动；管理后台角色页可调（已有）；部署后核对见 §6。
+- **注意**：`email-service.js` 里 `send_type='ban'` 仍是合法的角色值（管理员可主动把某个角色设为禁发），`v3_11DB` 只修默认角色这一行的坏种子，不动这个机制。
+
 ## 4. Turnstile 新站点
 
 1. Dashboard → **Turnstile** → Add site，名字 `mail-aevorynthtech`，域名填 `aevorynthtech.com`，模式 **Managed**（默认即可）。
@@ -122,11 +151,12 @@ cp .deploy.env.example .deploy.env   # 首次：按 §1/§3 填好真实值
 
 脚本流程（见脚本内注释）：
 
-1. 校验 `.deploy.env` 必填项齐全、`jwt_secret` 长度 ≥ 32 且不等于本地测试 dummy 值。
+1. 校验 `.deploy.env` 必填项齐全、`jwt_secret` 与 `FIELD_ENC_KEY` 长度 ≥ 32 且不等于本地测试 dummy 值（`FIELD_ENC_KEY` 与 `jwt_secret` 绝不复用）。
 2. 前端构建：`mail-vue` 下 `npm install --legacy-peer-deps --no-package-lock --no-save && npm run build`，产物进 `mail-worker/dist`（上游 `[build].command` 用 pnpm，本机 VM 未装 pnpm，改用 npm；构建产物与行为一致）。
-3. 生成 `mail-worker/wrangler.deploy.toml`（模板见 §5.1，变量来自 `.deploy.env`；`[assets] directory = "./dist"`、`run_worker_first = true`，`/api/*` 先走 Worker，其余走静态资源）。
-4. `npx wrangler deploy --config wrangler.deploy.toml`，部署 Worker `mail-ultimate` 并绑定路由 `aevorynthtech.com`（custom domain）。
-5. 部署后打印检查清单（§6），**不自动跑 `/init`**——`/init` 必须人工确认后再调（只跑一次，幂等）。
+3. 生成 `mail-worker/wrangler.deploy.toml`（模板见 §5.1，变量来自 `.deploy.env`；`[assets] directory = "./dist"`、`run_worker_first = true`，`/api/*` 先走 Worker，其余走静态资源）。**模板里绝不写 `field_enc_key` 的 `[vars]` 明文值**（见 §3.1）。
+4. 设置 `field_enc_key` secret 并校验（见 §3.1）：`wrangler secret put field_enc_key`（值只经 stdin 传入，不打印、不写日志；须在 `mail-worker` 目录下用 `--config wrangler.deploy.toml` 跑）→ 校验 toml 无 `field_enc_key` 明文 → `wrangler secret list` 含 `field_enc_key`；任一失败即停部署。
+5. `npx wrangler deploy --config wrangler.deploy.toml`，部署 Worker `mail-ultimate` 并绑定路由 `aevorynthtech.com`（custom domain）。
+6. 部署后打印检查清单（§6），**不自动跑 `/init`**——`/init` 必须人工确认后再调（只跑一次，幂等）。
 
 ### 5.1 wrangler.deploy.toml 模板（由 deploy.sh 生成，不要手写提交）
 
@@ -203,8 +233,10 @@ command = "npm --prefix ../mail-vue install --legacy-peer-deps --no-package-lock
    - `user_totp` / `user_passkey` / `user_security` 三表存在（第六阶段）；`pragma_table_info(setting)` 含 `log_retention_days`、`log_ip_mask`、`ai_enabled`（第七阶段 AI 开关）；`pragma_table_info(email)` 含 `e2ee`；
    - `pragma_table_info(user)` 含 `wallpaper`、`wallpaper_tags`（第七阶段壁纸偏好）；`pragma_table_info(user_security)` 含 `auto_lock_minutes`（第七阶段闲置自动锁定）；`setting.log_ip_mask` 默认应为 1（第七阶段脱敏默认开启）；
    - perm 37–45 存在（37–42 第一阶段，43–45 第二阶段：告警中心父、告警查看、用户导出）。
+   - **默认角色（Phase 8 §8.2）**：`SELECT send_type, send_count FROM role WHERE role_id = 1` 应为 `day` / `50`（不是 `ban`）；若线上旧库仍是 `ban`，`/init` 的 `v3_11DB` 迁移会自动修正，修正后重查一次。
+   - **密钥缓存（Phase 8 §8.1，必查）**：跑完 `/init` 后用 REST API 核对 KV 的 `setting:` 缓存里 `resendTokens` 含发件域名——**只核对域名 key 是否存在，不打印密钥值**（例如用 `wrangler kv key get --namespace-id <KV_NAMESPACE_ID> --remote "setting:"` 取回后只看 key 名，绝不把 value 贴进聊天或文档）。若 `resendTokens` 为空对象，先查 `alert_log` 里有无 `resendTokens 解密/解析失败` 的记录，再核对 `field_enc_key` secret 是否已设（`wrangler secret list`），不要直接重填 Resend Key 掩盖问题。
 2. **管理后台设置**（管理员登录后）：填 Turnstile Site/Secret Key、Resend Key、TG Bot Token/Chat ID；确认注册验证 = OPEN、单 IP 24h 限 3、熔断阈值 20/分钟、密钥告警阈值 500；确认 AI 助手开关 = 开启（默认开启，设置页 Workers AI 一栏）；新建至少一把注册密钥。
-3. **收发信冒烟**：注册一个测试账号（走 Turnstile）→ 登录 → 发一封站内信 → 发一封站外信（走 CF Email）→ 从外部邮箱回一封（走 Email Routing 收信）→ 确认收发都通。**站外信发出前先核对主通道**：管理后台 → 系统设置页，发信服务一栏须显示 **Cloudflare Email Sending**（不是 Resend Token）；若显示 Resend，说明 `email` 绑定没生效，回 §2.2 第 5 步核对 `wrangler.deploy.toml` 里有没有 `name = "email"` 这一节。
+3. **收发信冒烟**：注册一个测试账号（走 Turnstile）→ 登录 → 发一封站内信 → 发一封站外信（走 CF Email）→ 从外部邮箱回一封（走 Email Routing 收信）→ 确认收发都通。**站外信发出前先核对主通道**：管理后台 → 系统设置页，发信服务一栏须显示 **Cloudflare Email Sending**（不是 Resend Token）；若显示 Resend，说明 `email` 绑定没生效，回 §2.2 第 5 步核对 `wrangler.deploy.toml` 里有没有 `name = "email"` 这一节。**新注册测试账号必须能发站外信（Phase 8 §8.2 必查）**：若站外信报“发送次数已用完/禁止发送”类错误，先查默认角色 `role_id=1` 是不是 `day`/`50`（见本节第 1 项），不要只重建账号。
 4. **风控冒烟**：后台用户列表 IP 列/筛选/导出、仪表盘 risk 卡片、封禁管理页、告警中心、注册日志页逐项打开一次；故意用同一 IP 注册第 4 个账号应被拒（`regIpLimit` 人话提示）。
 5. **巡检上线**（甲骨文，见 `oracle-patrol/README.md`）：填真实 `config.json`（D1 ID、CF API Token、TG、管理员账号）→ `--once --dry-run` 看拟封禁/WAF 表达式无误 → `--once` 实跑一次 → systemd 启用；Uptime Kuma 建 push 监控；热备机只装不启动。
 6. **WAF 规则**：在 aevorynthtech.com 的 Zone 里建规则 `mail-ultimate-ip-blocklist`（表达式 `http.host eq "aevorynthtech.com" and ip.src in { ... }`，初始为空集或巡检首次同步后自动生成；巡检只改这一条规则，不动其他规则）。

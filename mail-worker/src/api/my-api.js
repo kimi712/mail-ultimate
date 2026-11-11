@@ -1,11 +1,14 @@
 import app from '../hono/hono';
 import userService from '../service/user-service';
+import settingService from '../service/setting-service';
+import telegramService from '../service/telegram-service';
 import result from '../model/result';
 import userContext from '../security/user-context';
 import loginLogService from '../service/login-log-service';
 import orm from '../entity/orm';
 import user from '../entity/user';
 import { eq } from 'drizzle-orm';
+import { settingConst } from '../const/entity-const';
 import BizError from '../error/biz-error';
 
 app.get('/my/loginUserInfo', async (c) => {
@@ -38,8 +41,9 @@ app.get('/my/loginLog', async (c) => {
 });
 
 // Phase 2 A 路补充：语言偏好同步（后端 user.locale 列，总协调已在 v3_6DB 加列）。
-// 仅限本人数据；locale 只接受 8 种对外存储值（中文 zh-CN、英文 en、其余 6 种短码同值）。
-const LOCALES = ['zh-CN', 'en', 'ja', 'ko', 'vi', 'ru', 'es', 'fr'];
+// 仅限本人数据；locale 只接受 14 种对外存储值（中文 zh-CN、英文 en、其余 12 种短码同值）。
+// 2026-11-10 由 8 种扩到 14 种（新增 pt/id/de/ar/hi/th，与前端 locale.js 保持一致）。
+const LOCALES = ['zh-CN', 'en', 'ja', 'ko', 'vi', 'ru', 'es', 'fr', 'pt', 'id', 'de', 'ar', 'hi', 'th'];
 
 app.get('/my/locale', async (c) => {
 	const userId = c.get('user').userId;
@@ -120,6 +124,61 @@ app.delete('/my/delete', async (c) => {
 app.post('/my/hard-delete', async (c) => {
 	await userService.hardDeleteSelf(c, userContext.getUserId(c), await c.req.json().catch(() => ({})));
 	return c.json(result.ok());
+});
+
+// 用户自助绑定 Telegram：仅限本人数据。
+// GET /my/telegram：绑定状态（bound / chatId）。
+// POST /my/telegram/bind-code：生成一次性绑定码（10 分钟有效），
+// 返回 t.me 链接；需站长已配 Bot Token 且用户推送总开关开启。
+// POST /my/telegram/unbind：解绑（清掉 tg_chat_id 与未用的绑定码）。
+app.get('/my/telegram', async (c) => {
+	// 诱饵会话（v3_16DB）：恒返回未绑定（不透露真实绑定状态）。
+	if (userContext.isDecoy(c)) {
+		return c.json(result.ok({ bound: false, chatId: '' }));
+	}
+	const userId = c.get('user').userId;
+	const row = await orm(c).select({ tgChatId: user.tgChatId }).from(user)
+		.where(eq(user.userId, userId)).get();
+	const chatId = row?.tgChatId || '';
+	return c.json(result.ok({ bound: !!chatId, chatId }));
+});
+
+app.post('/my/telegram/bind-code', async (c) => {
+	// 诱饵会话（v3_16DB）：拒绝生成绑定码（不写真实绑定状态）。
+	if (userContext.isDecoy(c)) {
+		throw new BizError('Telegram 推送未开启（站长未配置机器人）', 400);
+	}
+	const { tgBotToken, tgUserPush } = await settingService.query(c);
+	if (!tgBotToken) {
+		throw new BizError('Telegram 推送未开启（站长未配置机器人）', 400);
+	}
+	if (tgUserPush === settingConst.tgUserPush.CLOSE) {
+		throw new BizError('Telegram 推送已关闭', 400);
+	}
+	const userId = c.get('user').userId;
+	const { code, expiresAt } = telegramService.generateBindCode();
+	await orm(c).update(user).set({ tgBindCode: code, tgBindExpires: expiresAt })
+		.where(eq(user.userId, userId)).run();
+	const botUsername = await telegramService.getBotUsername(c);
+	const link = botUsername ? `https://t.me/${botUsername}?start=${code}` : '';
+	return c.json(result.ok({ code, link, botUsername: botUsername || '', expiresAt }));
+});
+
+app.post('/my/telegram/unbind', async (c) => {
+	// 诱饵会话（v3_16DB）：假装解绑成功，实际不动真实绑定。
+	if (userContext.isDecoy(c)) {
+		return c.json(result.ok());
+	}
+	const userId = c.get('user').userId;
+	await orm(c).update(user).set({ tgChatId: '', tgBindCode: '', tgBindExpires: '' })
+		.where(eq(user.userId, userId)).run();
+	return c.json(result.ok());
+});
+
+// 金丝雀声明日期（安全中心展示）：取 setting.canary_date，默认部署当天，管理员在系统设置里改。
+app.get('/my/canary', async (c) => {
+	const { canaryDate } = await settingService.query(c);
+	return c.json(result.ok({ canaryDate: canaryDate || '2026-11-09' }));
 });
 
 

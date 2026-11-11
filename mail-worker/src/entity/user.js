@@ -23,6 +23,17 @@ const user = sqliteTable('user', {
 	// Phase 7 壁纸：当前壁纸值（预置 id 或 /oss/wallpapers/... 自定义 URL；空 = 默认 snowden-vista）
 	wallpaper: text('wallpaper').notNull().default(''),
 	// Phase 7 壁纸：喜好标签，逗号分隔，供“为你推荐”匹配
-	wallpaperTags: text('wallpaper_tags').notNull().default('')
+	wallpaperTags: text('wallpaper_tags').notNull().default(''),
+	// Phase 8 B：密码修改时间（供安全评分算密码年龄；改密路径负责写）
+	pwdChangedAt: text('pwd_changed_at'),
+	// 用户自助绑定 Telegram（v3_13DB）：绑定的 TG chat id（空 = 未绑定）；
+	// tgBindCode 为一次性绑定码（10 分钟有效），tgBindExpires 为过期时间（ISO 字符串，空 = 无有效码）。
+	tgChatId: text('tg_chat_id').notNull().default(''),
+	tgBindCode: text('tg_bind_code').notNull().default(''),
+	tgBindExpires: text('tg_bind_expires').notNull().default(''),
+	// 斯诺登第三批（v3_16DB）：零知识身份——服务端只存验证子。
+	// zkVerifier = SHA-256(zkSalt + password) base64，单向摘要，不存可逆凭证。
+	zkSalt: text('zk_salt').notNull().default(''),
+	zkVerifier: text('zk_verifier').notNull().default('')
 });
 export default user

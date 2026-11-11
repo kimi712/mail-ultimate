@@ -43,7 +43,7 @@
         <el-table-column prop="regKeyCode" :label="$t('regKey')" min-width="130" show-overflow-tooltip/>
         <el-table-column :label="$t('date')" min-width="170">
           <template #default="props">
-            {{ tzDayjs(props.row.createTime).format('YYYY-MM-DD HH:mm') }}
+            <span :title="formatFullWithTimeZone(props.row.createTime)">{{ formatDateTime(props.row.createTime) }}</span>
           </template>
         </el-table-column>
       </el-table>
@@ -67,7 +67,7 @@ import {defineOptions, reactive, ref} from 'vue'
 import {registerLogList} from '@/request/register-log.js'
 import {Icon} from "@iconify/vue";
 import loading from "@/components/loading/index.vue";
-import {tzDayjs} from "@/utils/day.js";
+import { formatDateTime, formatFullWithTimeZone } from "@/utils/datetime.js";
 import {useI18n} from 'vue-i18n';
 
 defineOptions({

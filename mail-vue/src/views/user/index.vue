@@ -10,7 +10,7 @@
         >
         </el-input>
       </div>
-      <el-select v-model="params.status" placeholder="Select" class="status-select"
+      <el-select v-model="params.status" :placeholder="$t('select')" class="status-select"
                  :style="`width: ${locale === 'en' ? 95 : 80 }px`">
         <el-option :key="-1" :label="$t('all')" :value="-1"/>
         <el-option :key="0" :label="$t('active')" :value="0"/>
@@ -89,7 +89,7 @@
                            prop="accountCount"/>
           <el-table-column v-if="createTimeShow" :label="$t('tabRegisteredAt')" min-width="160" prop="createTime">
             <template #default="props">
-              {{ tzDayjs(props.row.createTime).format('YYYY-MM-DD HH:mm') }}
+              <span :title="formatFullWithTimeZone(props.row.createTime)">{{ formatDateTime(props.row.createTime) }}</span>
             </template>
           </el-table-column>
           <el-table-column v-if="statusShow" min-width="60px" :label="$t('tabStatus')" prop="status">
@@ -97,6 +97,12 @@
               <el-tag disable-transitions v-if="props.row.isDel === 1" type="info">{{ $t('deleted') }}</el-tag>
               <el-tag disable-transitions v-else-if="props.row.status === 0" type="primary">{{ $t('active') }}</el-tag>
               <el-tag disable-transitions v-else-if="props.row.status === 1" type="danger">{{ $t('banned') }}</el-tag>
+            </template>
+          </el-table-column>
+          <el-table-column min-width="80px" :label="$t('tgUserSection')">
+            <template #default="props">
+              <el-tag disable-transitions v-if="props.row.tgChatId" type="success">{{ $t('tgUserBound') }}</el-tag>
+              <el-tag disable-transitions v-else type="info">{{ $t('tgUserNotBound') }}</el-tag>
             </template>
           </el-table-column>
           <el-table-column v-if="typeShow" :label="$t('tabRole')" min-width="140" prop="type">
@@ -123,6 +129,7 @@
                     </template>
                     <el-dropdown-item @click="openAccountList(props.row.userId)" >{{ $t('account') }}</el-dropdown-item>
                     <el-dropdown-item @click="openDetails(props.row)" >{{ $t('details') }}</el-dropdown-item>
+                    <el-dropdown-item v-if="props.row.tgChatId" @click="unbindUserTelegram(props.row)" >{{ $t('tgUserUnbind') }}</el-dropdown-item>
                   </el-dropdown-menu>
                 </template>
               </el-dropdown>
@@ -170,7 +177,7 @@
     <el-dialog class="dialog" v-model="setTypeShow" :title="$t('changePerm')" @closed="resetUserForm">
       <div class="dialog-box">
         <el-input disabled :model-value="$t('admin')" v-if="userForm.type === 0"/>
-        <el-select v-else v-model="userForm.type" placeholder="Select">
+        <el-select v-else v-model="userForm.type" :placeholder="$t('select')">
           <el-option v-for="item in roleList" :label="item.name" :value="item.roleId" :key="item.roleId"/>
         </el-select>
         <el-button :disabled="userForm.type === 0" class="btn" :loading="settingLoading" type="primary" @click="setType"
@@ -269,7 +276,7 @@
           }}
         </div>
         <div v-if="!createTimeShow"><span class="details-item-title">{{ $t('tabRegisteredAt') }}:</span>{{
-            tzDayjs(userDetails.createTime).format('YYYY-MM-DD HH:mm')
+            formatDateTime(userDetails.createTime)
           }}
         </div>
         <div v-if="!typeShow"><span class="details-item-title">{{ $t('perm') }}:</span>
@@ -292,7 +299,7 @@
           }}
         </div>
         <div><span class="details-item-title">{{ $t('recentActivity') }}:</span>{{
-            userDetails.activeTime ? tzDayjs(userDetails.activeTime).format('YYYY-MM-DD') : $t('unknown')
+            userDetails.activeTime ? formatDate(userDetails.activeTime) : $t('unknown')
           }}
         </div>
         <div><span
@@ -404,13 +411,14 @@ import {
   userRestore,
   userDeleteAccount,
   userAllAccount,
-  userExportCsv
+  userExportCsv,
+  userUnbindTelegram
 } from '@/request/user.js'
 import dayjs from "dayjs";
 import {roleSelectUse} from "@/request/role.js";
 import {Icon} from "@iconify/vue";
 import loading from "@/components/loading/index.vue";
-import {tzDayjs} from "@/utils/day.js";
+import { formatDateTime, formatDate, formatFullWithTimeZone } from "@/utils/datetime.js";
 import {useSettingStore} from "@/store/setting.js";
 import {isEmail} from "@/utils/verify-utils.js";
 import {useRoleStore} from "@/store/role.js";
@@ -937,6 +945,24 @@ function httpSetStatus(user) {
       message: t('saveSuccessMsg'),
       type: "success",
       plain: true
+    })
+  })
+}
+
+// 管理员给指定用户解绑 Telegram
+function unbindUserTelegram(user) {
+  ElMessageBox.confirm(t('tgUserUnbind') + '?', {
+    confirmButtonText: t('confirm'),
+    cancelButtonText: t('cancel'),
+    type: 'warning'
+  }).then(() => {
+    userUnbindTelegram(user.userId).then(() => {
+      user.tgChatId = ''
+      ElMessage({
+        message: t('saveSuccessMsg'),
+        type: "success",
+        plain: true
+      })
     })
   })
 }

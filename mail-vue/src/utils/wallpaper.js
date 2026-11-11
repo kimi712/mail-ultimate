@@ -13,6 +13,8 @@ export const WALLPAPER_KEY = 'mail-wallpaper';
 export const WALLPAPER_TAGS_KEY = 'mail-wallpaper-tags';
 export const WALLPAPER_CUSTOM_KEY = 'mail-wallpaper-custom';
 export const DEFAULT_WALLPAPER_ID = 'snowden-vista';
+// 纯色主题：用户选“纯色”即不显示壁纸图，只留主题纯色底。存 'none' 作标记（空串仍表示“未选，用默认壁纸”）。
+export const SOLID_WALLPAPER_ID = 'none';
 export const MAX_UPLOAD_SIZE = 2 * 1024 * 1024;
 export const ALLOWED_UPLOAD_TYPES = ['image/jpeg', 'image/png', 'image/webp'];
 
@@ -86,7 +88,12 @@ export function resolveWallpaperUrl(value, list) {
 // 应用背景：写 documentElement 的 data-wallpaper / --wallpaper-url / data-wallpaper-dark，
 // 背景层、遮罩与深色压暗见 style.css 的 html[data-wallpaper] 规则；
 // 登录页与邮箱布局共用同一层，登录页表单卡片本身保持不透明以保证文字可读。
+// 纯色主题（value === 'none'）：不贴壁纸图，只留主题纯色底。
 export function applyWallpaper(value, list, isDark) {
+	if (value === SOLID_WALLPAPER_ID) {
+		clearWallpaper();
+		return '';
+	}
 	const url = resolveWallpaperUrl(value, list);
 	try {
 		const root = document.documentElement;

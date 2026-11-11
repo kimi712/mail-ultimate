@@ -2,7 +2,7 @@
 // 覆盖：v3_9DB 迁移（setting.ai_enabled 列 + 默认 1 + 幂等）、AI 开关、
 // 未登录拒绝、输入校验、emailId 归属校验、每用户每天 50 次限流、
 // AI 不可用时优雅降级（ai_unavailable，HTTP 恒 200）、
-// 三个接口成功 + 主备模型降级（service 级，mock c.env.AI，不调真实 API）。
+// 三个接口成功 + 主备模型降级（service 级，mock c.env.ai，不调真实 API）。
 // 本地 miniflare 没有真实 Workers AI 绑定：HTTP 层成功路径无法走通，
 // 成功/降级用 service 级 mock 覆盖；HTTP 层覆盖开关/限流/校验/未登录/
 // 不可用。写法复用 test/phase6.spec.js 的 fakeCtx/api/setSetting。
@@ -99,7 +99,7 @@ async function setSetting(fields) {
 	await env.kv.put('setting:', JSON.stringify(cached));
 }
 
-// ---- mock AI（service 级注入 c.env.AI；不调真实 API） ----
+// ---- mock AI（service 级注入 c.env.ai；不调真实 API） ----
 function mockAI({ failPrimary = false, failAll = false, response = '测试标题\n\n测试正文内容' } = {}) {
 	const calls = [];
 	return {
@@ -110,15 +110,43 @@ function mockAI({ failPrimary = false, failAll = false, response = '测试标题
 				if (failAll || (failPrimary && calls.length === 1)) {
 					throw new Error('mock AI boom');
 				}
+				// stream: true 时模拟 Workers AI 的 SSE 流：逐字发
+				// data: {"response": "字"}，最后发 data: [DONE]。
+				if (opts && opts.stream) {
+					const encoder = new TextEncoder();
+					return new ReadableStream({
+						start(controller) {
+							for (const ch of response) {
+								controller.enqueue(encoder.encode(`data: ${JSON.stringify({ response: ch })}\n\n`));
+							}
+							controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+							controller.close();
+						}
+					});
+				}
 				return { response };
 			}
 		}
 	};
 }
 
+// 解析 SSE 响应全文，返回按顺序的帧对象数组（delta / done / error）。
+async function readSse(res) {
+	const text = await res.text();
+	const frames = [];
+	for (const part of text.split('\n\n')) {
+		const line = part.trim();
+		if (!line.startsWith('data:')) continue;
+		const payload = line.slice(5).trim();
+		if (!payload || payload === '[DONE]') continue;
+		frames.push(JSON.parse(payload));
+	}
+	return frames;
+}
+
 function serviceCtx(mock) {
 	return {
-		env: { db: env.db, kv: env.kv, domain: env.domain, AI: mock ? mock.binding : undefined },
+		env: { db: env.db, kv: env.kv, domain: env.domain, ai: mock ? mock.binding : undefined },
 		req: { header: () => null },
 		get: () => undefined,
 		set: () => {}
@@ -202,6 +230,11 @@ describe('鉴权', () => {
 
 	it('未登录调 /ai/summarize 被拒 401', async () => {
 		const res = await api('/ai/summarize', { method: 'POST', body: { body: 'hello world' } });
+		expect(res.json.code).toBe(401);
+	});
+
+	it('未登录调 /ai/usage 被拒 401', async () => {
+		const res = await api('/ai/usage', { method: 'GET' });
 		expect(res.json.code).toBe(401);
 	});
 });
@@ -302,6 +335,31 @@ describe('限流（HTTP）', () => {
 	});
 });
 
+describe('用量查询（HTTP）', () => {
+	it('登录后 GET /ai/usage 返回当日用量（未用过：used 0 / limit 50 / remaining 50）', async () => {
+		await resetAiQuota(alice.userId);
+		const res = await api('/ai/usage', { method: 'GET', token: alice.token });
+		expect(res.status).toBe(200);
+		expect(res.json.code).toBe(200);
+		expect(res.json.data.used).toBe(0);
+		expect(res.json.data.limit).toBe(50);
+		expect(res.json.data.remaining).toBe(50);
+	});
+
+	it('用量查询如实反映 KV 计数（已用 3 次：used 3 / remaining 47），且不计次数', async () => {
+		await env.kv.put(aiDayKey(alice.userId), '3');
+		try {
+			const res = await api('/ai/usage', { method: 'GET', token: alice.token });
+			expect(res.json.data.used).toBe(3);
+			expect(res.json.data.remaining).toBe(47);
+			const again = await api('/ai/usage', { method: 'GET', token: alice.token });
+			expect(again.json.data.used).toBe(3);
+		} finally {
+			await resetAiQuota(alice.userId);
+		}
+	});
+});
+
 describe('AI 不可用（HTTP）', () => {
 	it('本地无 AI 绑定时 compose 返回 ai_unavailable，HTTP 200（不是 500）', async () => {
 		await resetAiQuota(alice.userId);
@@ -332,8 +390,10 @@ describe('写信 / 回信 / 摘要（service + mock AI）', () => {
 		const data = await aiService.compose(serviceCtx(mock), alice.userId, { prompt: '写一封邮件' });
 		expect(data.subject).toBe('测试标题');
 		expect(mock.calls.length).toBe(2);
-		expect(mock.calls[0].model).toBe('@cf/meta/llama-3.1-8b-instruct');
-		expect(mock.calls[1].model).toBe('@cf/meta/llama-3-8b-instruct');
+		// 模型链（2026-11-09 提速调整）：主 llama-3.1-8b-instruct-fp8，备 qwen3.8-27b；
+		// 旧口径（主 qwen、备 gemma-4-26b）已作废，gemma 已移出模型链。
+		expect(mock.calls[0].model).toBe('@cf/meta/llama-3.1-8b-instruct-fp8');
+		expect(mock.calls[1].model).toBe('@cf/qwen/qwen3.8-27b');
 		expect(await aiUsage(alice.userId)).toBe(1);
 	});
 
@@ -432,6 +492,22 @@ describe('写信 / 回信 / 摘要（service + mock AI）', () => {
 		expect(data.summary).not.toContain('第六行');
 	});
 
+	it('summarizeStream（直接传 body）成功：SSE 逐字返回，结束帧带 3 行摘要，计 1 次', async () => {
+		await resetAiQuota(alice.userId);
+		const mock = mockAI({ response: '完成了 A、B、C 三件事\n下周计划做 D\n无其他事项' });
+		const res = await aiService.summarizeStream(serviceCtx(mock), alice.userId, { body: '一封很长的邮件正文' });
+		expect(res.headers.get('content-type')).toContain('text/event-stream');
+		const frames = await readSse(res);
+		const deltas = frames.filter(f => typeof f.delta === 'string');
+		expect(deltas.map(f => f.delta).join('')).toBe('完成了 A、B、C 三件事\n下周计划做 D\n无其他事项');
+		const done = frames.find(f => f.done);
+		expect(done).toBeTruthy();
+		expect(done.summary.split('\n').length).toBe(3);
+		expect(done.summary).toContain('完成了 A、B、C');
+		expect(done.remaining).toBe(49);
+		expect(await aiUsage(alice.userId)).toBe(1);
+	});
+
 	it('summarize 无正文邮件抛 ai_invalid_input', async () => {
 		const emailId = await insertEmail(alice.userId, await accountIdOf('p7-alice@example.com'), '空邮件', '');
 		const mock = mockAI();
@@ -473,5 +549,61 @@ describe('写信 / 回信 / 摘要（service + mock AI）', () => {
 		}
 		expect(code).toBe('ai_disabled');
 		expect(mock.calls.length).toBe(0);
+	});
+});
+
+describe('E2EE 邮件不进 AI（2026-11-11 审计修复）', () => {
+	async function insertE2eeEmail(userId, accountId) {
+		const row = await env.db.prepare(
+			`INSERT INTO email (account_id, user_id, subject, text, content, type, is_del, e2ee) VALUES (?, ?, ?, ?, ?, 0, 0, 1)`
+		).bind(accountId, userId, '加密信', 'e2ee:v1:AAAAAAAAAAAAAAAA', 'e2ee:v1:AAAAAAAAAAAAAAAA').run();
+		return row.meta.last_row_id;
+	}
+
+	it('摘要 E2EE 邮件被拒，模型一次也不调、不计配额', async () => {
+		await resetAiQuota(alice.userId);
+		const emailId = await insertE2eeEmail(alice.userId, await accountIdOf('p7-alice@example.com'));
+		const mock = mockAI();
+		let code = '';
+		try {
+			await aiService.summarize(serviceCtx(mock), alice.userId, { emailId });
+		} catch (e) {
+			code = e.code;
+		}
+		expect(code).toBe('ai_e2ee_unsupported');
+		expect(mock.calls.length).toBe(0);
+		expect(await aiUsage(alice.userId)).toBe(0);
+	});
+
+	it('回信 E2EE 邮件被拒，模型一次也不调', async () => {
+		await resetAiQuota(alice.userId);
+		const emailId = await insertE2eeEmail(alice.userId, await accountIdOf('p7-alice@example.com'));
+		const mock = mockAI();
+		let code = '';
+		try {
+			await aiService.reply(serviceCtx(mock), alice.userId, { emailId });
+		} catch (e) {
+			code = e.code;
+		}
+		expect(code).toBe('ai_e2ee_unsupported');
+		expect(mock.calls.length).toBe(0);
+	});
+
+	it('流式摘要 E2EE 邮件被拒（建流前抛错，不返回 SSE）', async () => {
+		await resetAiQuota(alice.userId);
+		const emailId = await insertE2eeEmail(alice.userId, await accountIdOf('p7-alice@example.com'));
+		const mock = mockAI();
+		await expect(aiService.summarizeStream(serviceCtx(mock), alice.userId, { emailId }))
+			.rejects.toMatchObject({ code: 'ai_e2ee_unsupported' });
+		expect(mock.calls.length).toBe(0);
+	});
+
+	it('普通邮件摘要不受影响（对照组）', async () => {
+		await resetAiQuota(alice.userId);
+		const emailId = await insertEmail(alice.userId, await accountIdOf('p7-alice@example.com'), '普通信', '今天天气很好');
+		const mock = mockAI({ response: '要点：天气很好' });
+		const data = await aiService.summarize(serviceCtx(mock), alice.userId, { emailId });
+		expect(data.summary).toContain('天气很好');
+		expect(mock.calls.length).toBe(1);
 	});
 });

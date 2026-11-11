@@ -3,6 +3,17 @@ import loginService from '../service/login-service';
 import result from '../model/result';
 import userContext from '../security/user-context';
 import passkeyService from '../service/passkey-service';
+import zkService from '../service/zk-service';
+
+// 斯诺登第三批（v3_16DB）：零知识登录挑战。公开接口（/login 前缀免鉴权）。
+// GET /login/zk-challenge?email=… → { challengeId, nonce, salt, enabled }。
+// 无论账号是否开通 ZK 都返回挑战（不开通时用随机盐），不透露开通状态；
+// 挑战 5 分钟过期、一次有效。前端先算 verifier = SHA-256(salt + password)，
+// 再算 response = SHA-256(verifier + nonce) base64，随登录请求一起发 zk 字段。
+app.get('/login/zk-challenge', async (c) => {
+	const challenge = await zkService.issueChallenge(c, c.req.query('email') || '');
+	return c.json(result.ok(challenge));
+});
 
 // Phase 6：密码通过且用户开启 TOTP 时 login() 返回 {needTotp, totpToken}
 // 而非 JWT，原样返回给前端走 POST /login/totp；否则照常返回 {token}。

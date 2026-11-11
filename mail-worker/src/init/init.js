@@ -39,6 +39,13 @@ const dbInit = {
 		await this.v3_8DB(c);
 		await this.v3_9DB(c);
 		await this.v3_10DB(c);
+		await this.v3_11DB(c);
+		await this.v3_12DB(c);
+		await this.v3_13DB(c);
+		await this.v3_14DB(c);
+		await this.v3_15DB(c);
+		await this.v3_16DB(c);
+		await this.v3_17DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
 	},
@@ -304,6 +311,374 @@ const dbInit = {
 		const COLUMN_SQL_LIST = [
 			`ALTER TABLE user ADD COLUMN wallpaper TEXT NOT NULL DEFAULT '';`,
 			`ALTER TABLE user ADD COLUMN wallpaper_tags TEXT NOT NULL DEFAULT '';`
+		];
+		for (const sql of COLUMN_SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		}
+	},
+
+	async v3_11DB(c) {
+		// Phase 8：默认角色修正（根因 ② 的正式产品决策落地）+ 全部新表/新列。
+		// 普通用户（role_id=1）原来种子是 send_type='ban'、send_count=NULL，
+		// 普通用户根本发不了信。正式决策：send_type='day'、send_count=50
+		// （每天 50 封站外信；站内信不受此限；管理员不限，现有行为不变）。
+		// 只修已知的坏种子值（WHERE role_id=1 AND send_type='ban'）；
+		// 管理员已 deliberate 改过的值（day/50 以外、count 等）一律不动。
+		// 新鲜安装的种子已同步改为 day/50（见本文件 role 种子行）。
+		// 其余语句：B（登录限流阈值 + user.pwd_changed_at + 审计索引）、
+		// C（ai_chat 对话历史 + translate_cache 翻译缓存）、E（email 信任列 +
+		// trusted_sender / mail_prefs / spam_feedback / pending_send /
+		// scheduled_email）、F（contacts / mail_rules / email_label /
+		// mail_rule_log / user_recovery_code / user_recovery_email /
+		// password_reset_token / known_ip）。
+		// 注意：email 表的新列（auth_spf 等）故意不进 entity/email.js——
+		// 实体加列会让未合并 DDL 的既有测试直接崩；新列一律经 raw SQL 访问 +
+		// hasEmailTrustColumns() 探测降级（见 mail-trust-service）。
+		// 逐条独立 try/catch + console.warn，幂等、可重跑。
+		const SQL_LIST = [
+			`UPDATE role SET send_type = 'day', send_count = 50 WHERE role_id = 1 AND send_type = 'ban';`,
+			// B：登录限流阈值（管理员可调；缺失用代码默认值兜底）
+			`ALTER TABLE setting ADD COLUMN login_rate_limit_window_min INTEGER NOT NULL DEFAULT 15;`,
+			`ALTER TABLE setting ADD COLUMN login_rate_limit_ip_max INTEGER NOT NULL DEFAULT 5;`,
+			`ALTER TABLE setting ADD COLUMN login_rate_limit_acct_max INTEGER NOT NULL DEFAULT 5;`,
+			`ALTER TABLE setting ADD COLUMN login_rate_limit_lock_base_min INTEGER NOT NULL DEFAULT 5;`,
+			// B：密码年龄（改密路径写 pwd_changed_at；迁移前读 create_time 回落）
+			`ALTER TABLE user ADD COLUMN pwd_changed_at TEXT;`,
+			`CREATE INDEX IF NOT EXISTS idx_audit_log_actor_time ON audit_log(actor_user_id, create_time);`,
+			// C：AI 对话历史（30 天保留，由 assistant-service 随调用清理）
+			`CREATE TABLE IF NOT EXISTS ai_chat (
+				chat_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				role TEXT NOT NULL,
+				content TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+			);`,
+			`CREATE INDEX IF NOT EXISTS idx_ai_chat_user_time ON ai_chat(user_id, created_at);`,
+			// C：翻译缓存（键为内容 SHA-256 + 语种对，不含用户身份）
+			`CREATE TABLE IF NOT EXISTS translate_cache (
+				source_hash TEXT PRIMARY KEY,
+				source_lang TEXT NOT NULL DEFAULT '',
+				target_lang TEXT NOT NULL DEFAULT '',
+				result TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+			);`,
+			`CREATE INDEX IF NOT EXISTS idx_translate_cache_time ON translate_cache(created_at);`,
+			// E：邮件信任列（SPF/DKIM/DMARC 结论 + 退订 + 垃圾标记）
+			`ALTER TABLE email ADD COLUMN auth_spf TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE email ADD COLUMN auth_dkim TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE email ADD COLUMN auth_dmarc TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE email ADD COLUMN unsubscribe_url TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE email ADD COLUMN unsubscribe_mailto TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE email ADD COLUMN unsubscribe_one_click INTEGER NOT NULL DEFAULT 0;`,
+			`ALTER TABLE email ADD COLUMN is_spam INTEGER NOT NULL DEFAULT 0;`,
+			`CREATE INDEX IF NOT EXISTS idx_email_is_spam ON email(user_id, type, is_spam);`,
+			`CREATE TABLE IF NOT EXISTS trusted_sender (
+				user_id INTEGER NOT NULL,
+				sender_email TEXT NOT NULL,
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				PRIMARY KEY (user_id, sender_email)
+			);`,
+			`CREATE TABLE IF NOT EXISTS mail_prefs (
+				user_id INTEGER PRIMARY KEY,
+				undo_seconds INTEGER NOT NULL DEFAULT 10,
+				remote_images INTEGER NOT NULL DEFAULT 0,
+				forward_email TEXT NOT NULL DEFAULT ''
+			);`,
+			`CREATE TABLE IF NOT EXISTS spam_feedback (
+				feedback_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				email_id INTEGER NOT NULL,
+				sender_email TEXT NOT NULL DEFAULT '',
+				subject TEXT NOT NULL DEFAULT '',
+				kind TEXT NOT NULL,
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE (user_id, email_id, kind)
+			);`,
+			`CREATE INDEX IF NOT EXISTS idx_spam_feedback_sender ON spam_feedback(sender_email);`,
+			`CREATE TABLE IF NOT EXISTS pending_send (
+				pending_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				payload TEXT NOT NULL DEFAULT '',
+				undo_until TEXT NOT NULL,
+				status TEXT NOT NULL DEFAULT 'pending',
+				result TEXT NOT NULL DEFAULT '',
+				error TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+			);`,
+			`CREATE INDEX IF NOT EXISTS idx_pending_send_due ON pending_send(status, undo_until);`,
+			`CREATE TABLE IF NOT EXISTS scheduled_email (
+				scheduled_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				account_id INTEGER NOT NULL,
+				payload TEXT NOT NULL DEFAULT '',
+				scheduled_at TEXT NOT NULL,
+				status TEXT NOT NULL DEFAULT 'pending',
+				attempts INTEGER NOT NULL DEFAULT 0,
+				result TEXT NOT NULL DEFAULT '',
+				error TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				sent_at TEXT
+			);`,
+			`CREATE INDEX IF NOT EXISTS idx_scheduled_email_due ON scheduled_email(status, scheduled_at);`,
+			// F：联系人 / 邮件规则 / 标签 / 规则日志
+			`CREATE TABLE IF NOT EXISTS contacts (
+				contact_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				name TEXT NOT NULL DEFAULT '',
+				email TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE (user_id, email)
+			);`,
+			`CREATE TABLE IF NOT EXISTS mail_rules (
+				rule_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				name TEXT NOT NULL DEFAULT '',
+				condition_json TEXT NOT NULL DEFAULT '{}',
+				action_json TEXT NOT NULL DEFAULT '[]',
+				enabled INTEGER NOT NULL DEFAULT 1,
+				sort INTEGER NOT NULL DEFAULT 0,
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+			);`,
+			`CREATE TABLE IF NOT EXISTS email_label (
+				label_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				email_id INTEGER NOT NULL,
+				label TEXT NOT NULL DEFAULT '',
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE (user_id, email_id, label)
+			);`,
+			`CREATE TABLE IF NOT EXISTS mail_rule_log (
+				log_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				rule_id INTEGER NOT NULL,
+				email_id INTEGER NOT NULL,
+				actions_json TEXT NOT NULL DEFAULT '[]',
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+			);`,
+			// F：账号恢复（恢复码只存 SHA-256；token 只存哈希、1 小时、一次性）
+			`CREATE TABLE IF NOT EXISTS user_recovery_code (
+				code_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				code_hash TEXT NOT NULL DEFAULT '',
+				used INTEGER NOT NULL DEFAULT 0,
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				used_at TEXT
+			);`,
+			`CREATE TABLE IF NOT EXISTS user_recovery_email (
+				user_id INTEGER PRIMARY KEY,
+				backup_email TEXT NOT NULL DEFAULT '',
+				verified INTEGER NOT NULL DEFAULT 0,
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+			);`,
+			`CREATE TABLE IF NOT EXISTS password_reset_token (
+				token_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				token_hash TEXT NOT NULL DEFAULT '',
+				expires_at TEXT NOT NULL DEFAULT '',
+				used INTEGER NOT NULL DEFAULT 0,
+				created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				used_at TEXT
+			);`,
+			`CREATE TABLE IF NOT EXISTS known_ip (
+				known_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				ip TEXT NOT NULL DEFAULT '',
+				first_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				last_seen_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+				UNIQUE (user_id, ip)
+			);`,
+			`CREATE INDEX IF NOT EXISTS idx_contacts_user_email ON contacts(user_id, email);`,
+			`CREATE INDEX IF NOT EXISTS idx_mail_rules_user_sort ON mail_rules(user_id, sort);`,
+			`CREATE INDEX IF NOT EXISTS idx_recovery_code_user ON user_recovery_code(user_id, used);`,
+			`CREATE INDEX IF NOT EXISTS idx_reset_token_user ON password_reset_token(user_id, used);`
+		];
+		for (const sql of SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过 Phase 8 迁移语句：${e.message}`);
+			}
+		}
+	},
+
+	async v3_12DB(c) {
+		// 个人新邮件转发（通知）：mail_prefs 新列 forward_email，收件人配了该地址时，
+		// 收信流程把原信转发一份过去，用户在常用邮箱里就能收到新邮件提醒。
+		// 空 = 不转发。逐条独立 try/catch + console.warn，幂等、可重跑。
+		const COLUMN_SQL_LIST = [
+			`ALTER TABLE mail_prefs ADD COLUMN forward_email TEXT NOT NULL DEFAULT '';`
+		];
+		for (const sql of COLUMN_SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		}
+	},
+
+	async v3_13DB(c) {
+		// 用户自助绑定 Telegram：user 新列 tg_chat_id / tg_bind_code / tg_bind_expires，
+		// setting 新列 tg_user_push（0=开启（默认）/ 1=关闭），user.tg_bind_code 索引。
+		// 逐条独立 try/catch + console.warn，幂等、可重跑。
+		const COLUMN_SQL_LIST = [
+			`ALTER TABLE user ADD COLUMN tg_chat_id TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE user ADD COLUMN tg_bind_code TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE user ADD COLUMN tg_bind_expires TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE setting ADD COLUMN tg_user_push INTEGER NOT NULL DEFAULT 0;`,
+			`CREATE INDEX IF NOT EXISTS idx_user_tg_bind_code ON user(tg_bind_code);`
+		];
+		for (const sql of COLUMN_SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		}
+	},
+
+	async v3_14DB(c) {
+		// 斯诺登三件套：自毁邮件（email 新列 expire_at / burn_after_read / expire_group）、
+		// 一次性别名（email_alias 新表）、金丝雀日期（setting 新列 canary_date，默认部署当天）。
+		// 逐条独立 try/catch + console.warn，幂等、可重跑。
+		const COLUMN_SQL_LIST = [
+			`ALTER TABLE email ADD COLUMN expire_at TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE email ADD COLUMN burn_after_read INTEGER NOT NULL DEFAULT 0;`,
+			`ALTER TABLE email ADD COLUMN expire_group TEXT NOT NULL DEFAULT '';`,
+			`CREATE TABLE IF NOT EXISTS email_alias (
+				alias_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				account_id INTEGER NOT NULL,
+				local_part TEXT NOT NULL,
+				domain TEXT NOT NULL,
+				address TEXT NOT NULL,
+				status INTEGER NOT NULL DEFAULT 0,
+				recv_count INTEGER NOT NULL DEFAULT 0,
+				create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+				is_del INTEGER NOT NULL DEFAULT 0
+			);`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_alias_address ON email_alias(address);`,
+			`CREATE INDEX IF NOT EXISTS idx_alias_user ON email_alias(user_id);`,
+			`CREATE INDEX IF NOT EXISTS idx_email_expire_at ON email(expire_at);`,
+			`ALTER TABLE setting ADD COLUMN canary_date TEXT NOT NULL DEFAULT '2026-11-09';`
+		];
+		for (const sql of COLUMN_SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		}
+	},
+
+	async v3_15DB(c) {
+		// 斯诺登第二批（进阶 4 项）：
+		// ① 发件人隐身：email.sealed_sender（密封发件人信封，收件行明文发件人置空时用它恢复发件人）；
+		// ② 前向保密 + ③ 抗量子：email.cek_wrapped（按收件人包裹的一次性密钥）/ cek_alg
+		//    （''=旧版直接密钥加密，'sym'=对称 KEK 包裹，'mlkem768'=ML-KEM-768 包裹）/
+		//    e2ee_ver（1=旧版正文直接用 KEK 加密，2=正文用 CEK 加密）；
+		// ③ 抗量子密钥：user_security.mlkem_public_key（ML-KEM-768 封装公钥，可公开）/
+		//    mlkem_priv_enc（ML-KEM-768 解封私钥，经用户 KEK 加密后存放，服务端无法解密）；
+		// ④ 死亡开关：dead_man_switch 新表（每用户一行）。
+		// 逐条独立 try/catch + console.warn，幂等、可重跑。
+		const COLUMN_SQL_LIST = [
+			`ALTER TABLE email ADD COLUMN sealed_sender TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE email ADD COLUMN cek_wrapped TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE email ADD COLUMN cek_alg TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE email ADD COLUMN e2ee_ver INTEGER NOT NULL DEFAULT 1;`,
+			`ALTER TABLE user_security ADD COLUMN mlkem_public_key TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE user_security ADD COLUMN mlkem_priv_enc TEXT NOT NULL DEFAULT '';`,
+			`CREATE TABLE IF NOT EXISTS dead_man_switch (
+				user_id INTEGER PRIMARY KEY,
+				enabled INTEGER NOT NULL DEFAULT 0,
+				inactivity_days INTEGER NOT NULL DEFAULT 90,
+				action TEXT NOT NULL DEFAULT 'delete',
+				contact_email TEXT NOT NULL DEFAULT '',
+				message TEXT NOT NULL DEFAULT '',
+				warned_at TEXT NOT NULL DEFAULT '',
+				executed_at TEXT NOT NULL DEFAULT '',
+				status TEXT NOT NULL DEFAULT 'off',
+				create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+				update_time DATETIME DEFAULT CURRENT_TIMESTAMP
+			);`,
+			`CREATE INDEX IF NOT EXISTS idx_email_sealed ON email(sealed_sender);`,
+		];
+		for (const sql of COLUMN_SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		}
+	},
+
+	async v3_16DB(c) {
+		// 斯诺登第三批（9 项）：
+		// ① 胁迫密码 + ⑦ 隐藏邮箱（同一套第二密码机制）：user_decoy（第二密码 hash +
+		//    salt）/ decoy_email（诱饵邮箱的种子邮件，诱饵会话只读这些）；
+		// ② 可否认认证：email.deniable（可否认标记）/ deny_tag（CEK 对密文的 HMAC 标签，
+		//    收件人同样持有 CEK，第三方无法证明是谁发的）；
+		// ③ 邮件混淆：email.mix_deliver_at（站内投递生效时间，列表/最新邮件/未读
+		//    计数在此时刻前不可见）/ mix_relay（逻辑中继编号）/ mix_notified
+		//    （生效后转发/规则是否已补跑）；
+		// ④ 可搜索加密（盲索引）：email_blind_index（email_id + user_id + token，
+		//    服务端只匹配 token，不解密正文）；
+		// ⑤ 时间锁加密：email.timelock_until（解锁时刻）/ timelock_key（到时才放行的
+		//    CEK 包裹，解锁前 email.cek_wrapped 为空，读信解不开）；
+		// ⑥ 密钥分片 Shamir 与 ⑧ 隐写术不需新表（分片与隐写纯前端）；
+		// ⑨ 零知识身份：user.zk_salt / zk_verifier（服务端只存验证子，
+		// zkVerifier = SHA-256(salt + password) base64，不存可逆凭证）。
+		// 逐条独立 try/catch + console.warn，幂等、可重跑。
+		const COLUMN_SQL_LIST = [
+			`ALTER TABLE email ADD COLUMN mix_deliver_at TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE email ADD COLUMN mix_relay TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE email ADD COLUMN mix_notified INTEGER NOT NULL DEFAULT 0;`,
+			`ALTER TABLE email ADD COLUMN timelock_until TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE email ADD COLUMN deniable INTEGER NOT NULL DEFAULT 0;`,
+			`ALTER TABLE email ADD COLUMN deny_tag TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE user ADD COLUMN zk_salt TEXT NOT NULL DEFAULT '';`,
+			`ALTER TABLE user ADD COLUMN zk_verifier TEXT NOT NULL DEFAULT '';`,
+			`CREATE TABLE IF NOT EXISTS timelock_key (
+				email_id INTEGER PRIMARY KEY,
+				cek_wrapped TEXT NOT NULL DEFAULT '',
+				cek_alg TEXT NOT NULL DEFAULT '',
+				unlock_at TEXT NOT NULL DEFAULT '',
+				released INTEGER NOT NULL DEFAULT 0
+			);`,
+			`CREATE TABLE IF NOT EXISTS email_blind_index (
+				email_id INTEGER NOT NULL,
+				user_id INTEGER NOT NULL,
+				token TEXT NOT NULL,
+				PRIMARY KEY (email_id, user_id, token)
+			);`,
+			`CREATE INDEX IF NOT EXISTS idx_blind_token ON email_blind_index(user_id, token);`,
+			`CREATE TABLE IF NOT EXISTS user_decoy (
+				user_id INTEGER PRIMARY KEY,
+				password_hash TEXT NOT NULL DEFAULT '',
+				salt TEXT NOT NULL DEFAULT '',
+				enabled INTEGER NOT NULL DEFAULT 0,
+				seeded INTEGER NOT NULL DEFAULT 0,
+				create_time DATETIME DEFAULT CURRENT_TIMESTAMP,
+				update_time DATETIME DEFAULT CURRENT_TIMESTAMP
+			);`,
+			`CREATE TABLE IF NOT EXISTS decoy_email (
+				decoy_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				user_id INTEGER NOT NULL,
+				send_email TEXT NOT NULL DEFAULT '',
+				name TEXT NOT NULL DEFAULT '',
+				subject TEXT NOT NULL DEFAULT '',
+				text TEXT NOT NULL DEFAULT '',
+				content TEXT NOT NULL DEFAULT '',
+				unread INTEGER NOT NULL DEFAULT 1,
+				create_time DATETIME DEFAULT CURRENT_TIMESTAMP
+			);`,
+			`CREATE INDEX IF NOT EXISTS idx_decoy_user ON decoy_email(user_id);`,
+			`CREATE INDEX IF NOT EXISTS idx_email_mix ON email(mix_deliver_at);`,
+			`CREATE INDEX IF NOT EXISTS idx_email_timelock ON email(timelock_until);`,
 		];
 		for (const sql of COLUMN_SQL_LIST) {
 			try {
@@ -854,7 +1229,7 @@ const dbInit = {
         INSERT INTO role (
           role_id, name, key, create_time, sort, description, user_id, is_default, send_count, send_type, account_count
         ) VALUES (
-          1, '普通用户', NULL, '0000-00-00 00:00:00', 0, '只有普通使用权限', 0, 1, NULL, 'ban', 10
+          1, '普通用户', NULL, '0000-00-00 00:00:00', 0, '只有普通使用权限', 0, 1, 50, 'day', 10
         )
       `).run();
 		}
@@ -1028,6 +1403,30 @@ const dbInit = {
 		})
 
 		await c.env.db.batch(queryList);
+	},
+
+	async v3_17DB(c) {
+		// $1000 安全悬赏挑战：新表 challenge_attempt（尝试计数 + 回执）。
+		// 只存 SHA-256 摘要（phrase_hash / method_hash）+ 回执 id + 提交时间，
+		// 绝不存暗号原文与方法原文（最小数据原则）。
+		// 逐条独立 try/catch + console.warn，幂等、可重跑。
+		const SQL_LIST = [
+			`CREATE TABLE IF NOT EXISTS challenge_attempt (
+				attempt_id INTEGER PRIMARY KEY AUTOINCREMENT,
+				phrase_hash TEXT NOT NULL DEFAULT '',
+				method_hash TEXT NOT NULL DEFAULT '',
+				receipt_id TEXT NOT NULL DEFAULT '',
+				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+			);`,
+			`CREATE INDEX IF NOT EXISTS idx_challenge_attempt_time ON challenge_attempt(created_at);`
+		];
+		for (const sql of SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		}
 	}
 };
 export { dbInit };

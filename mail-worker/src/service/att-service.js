@@ -9,6 +9,7 @@ import { parseHTML } from 'linkedom';
 import { v4 as uuidv4 } from 'uuid';
 import domainUtils from '../utils/domain-uitls';
 import settingService from "./setting-service";
+import userContext from '../security/user-context';
 
 const attService = {
 
@@ -35,6 +36,10 @@ const attService = {
 	},
 
 	list(c, params, userId) {
+		// 诱饵会话（v3_16DB）：附件列表为空（诱饵邮件无附件；不透露真实信的附件）。
+		if (userContext.isDecoy(c)) {
+			return Promise.resolve([]);
+		}
 		const { emailId } = params;
 
 		return orm(c).select().from(att).where(

@@ -51,6 +51,59 @@ const routes = [
                     menu: true
                 }
             },
+            // Phase 8 F：隐私仪表盘 / 联系人 / 邮件规则（侧栏菜单入口）。
+            {
+                path: '/privacy',
+                name: 'privacy',
+                component: () => import('@/views/privacy/index.vue'),
+                meta: {
+                    title: 'privacyDashboard',
+                    name: 'privacy',
+                    menu: true
+                }
+            },
+            {
+                path: '/contacts',
+                name: 'contacts',
+                component: () => import('@/views/contacts/index.vue'),
+                meta: {
+                    title: 'contactsTitle',
+                    name: 'contacts',
+                    menu: true
+                }
+            },
+            {
+                path: '/mail-rules',
+                name: 'mail-rules',
+                component: () => import('@/views/rules/index.vue'),
+                meta: {
+                    title: 'mailRulesTitle',
+                    name: 'mail-rules',
+                    menu: true
+                }
+            },
+            // Phase 8 E：垃圾邮件文件夹（复用收件箱列表，spam=1 过滤）。
+            {
+                path: '/spam',
+                name: 'spam',
+                component: () => import('@/views/spam/index.vue'),
+                meta: {
+                    title: 'spam',
+                    name: 'spam',
+                    menu: true
+                }
+            },
+            // 回收站（复用收件箱列表，trash=1 只列已删邮件；删除=彻底删除，可恢复）。
+            {
+                path: '/trash',
+                name: 'trash',
+                component: () => import('@/views/trash/index.vue'),
+                meta: {
+                    title: 'trash',
+                    name: 'trash',
+                    menu: true
+                }
+            },
         ]
 
     },
@@ -62,6 +115,18 @@ const routes = [
         path: '/login',
         name: 'login',
         component: () => import('@/views/login/index.vue')
+    },
+    // Phase 8 F：找回账号（公开页，不走 layout；忘记密码入口跳这里）。
+    {
+        path: '/recovery',
+        name: 'recovery',
+        component: () => import('@/views/recovery/index.vue')
+    },
+    // $1000 安全悬赏挑战：公开状态页（无需登录，不走 layout）。
+    {
+        path: '/challenge',
+        name: 'challenge',
+        component: () => import('@/views/challenge/index.vue')
     },
     {
         path: '/test',
@@ -104,7 +169,10 @@ router.beforeEach((to, from, next) => {
 
     const token = localStorage.getItem('token')
 
-    if (!token && !to.path.startsWith('/login')) {
+    // Phase 8 F：/recovery（找回账号）与 /login 一样是公开页，无 token 也可进。
+    // $1000 安全悬赏挑战：/challenge 也是公开页。
+    const isPublic = to.path.startsWith('/login') || to.path.startsWith('/recovery') || to.path.startsWith('/challenge')
+    if (!token && !isPublic) {
         return next({name: 'login'})
     }
 

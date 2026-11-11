@@ -27,8 +27,10 @@
       @search="goToSearchList"
       @reset="goToSearchList"
     />
+    <!-- 搜功能：顶栏功能搜索（邮件搜索旁边；搜页面与各分区，点一下跳转）。 -->
+    <feature-search />
     <div class="toolbar">
-      <!-- Phase 7：顶栏语言切换器（地球图标 + 下拉，8 语种原生名；复用设置页同一切换机制）。 -->
+      <!-- Phase 7：顶栏语言切换器（地球图标 + 下拉，14 语种原生名；复用设置页同一切换机制）。 -->
       <el-dropdown trigger="click" popper-class="header-lang-dropdown" @command="changeLang">
         <div class="icon-item lang-switcher" :title="t('lang.language')" :aria-label="t('lang.language')">
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3c2.5 2.6 3.9 5.7 3.9 9s-1.4 6.4-3.9 9c-2.5-2.6-3.9-5.7-3.9-9S9.5 5.6 12 3z"/></svg>
@@ -131,6 +133,7 @@ import {hasPerm} from "@/perm/perm.js"
 import {useI18n} from "vue-i18n";
 import {setExtend} from "@/utils/day.js"
 import emailSearch from '@/components/email-search/index.vue'
+import featureSearch from '@/components/feature-search/index.vue'
 import {useEmailStore} from '@/store/email.js'
 import {useSendStore} from '@/store/send.js'
 import i18n from "@/i18n/index.js";
@@ -273,7 +276,7 @@ async function copyEmail(email) {
   }
 }
 
-// Phase 7：顶栏语言切换器（8 语种即时生效；复用设置页同一机制：
+// Phase 7：顶栏语言切换器（14 语种即时生效；复用设置页同一机制：
 // applyLocale 懒加载文案 + 写本地 mail-locale，setLocale 同步后端 user.locale）。
 const currentLocaleLabel = computed(() => {
   const found = SUPPORTED_LOCALES.find(item => item.short === settingStore.lang)
@@ -284,8 +287,8 @@ function changeLang(lang) {
   if (!SHORT_CODES.includes(lang) || lang === settingStore.lang) {
     return
   }
-  // dayjs 相对时间只内置 zh-cn/en（与旧 changeLang 保持一致）。
-  setExtend(lang === 'en' ? 'en' : 'zh-cn')
+  // dayjs 相对时间按界面语言走（14 语种，短码直传，day.js 内映射到语言包）。
+  setExtend(lang)
   applyLocale(i18n, settingStore, lang)
   // 已登录态同步到后端 user.locale；失败静默，下次登录时再同步。
   setLocale(toStoredLocale(lang)).catch(() => {
@@ -326,13 +329,11 @@ function changeAside() {
 }
 
 function clickLogout() {
-  logoutLoading.value = true
-  logout().then(() => {
-    localStorage.removeItem("token")
-    router.replace('/login')
-  }).finally(() => {
-    logoutLoading.value = false
-  })
+  // 秒登出：先清本地 token 并跳登录页，不等后端返回；后端失效 token 在后台跑，
+  // 失败也不影响本地登出（之前是等接口返回才跳，接口一慢按钮就一直转圈）。
+  logout().catch(() => {})
+  localStorage.removeItem("token")
+  router.replace('/login')
 }
 
 function formatName(email) {
@@ -578,6 +579,28 @@ onBeforeUnmount(() => {
 
   .icon-item:hover {
     background: var(--base-fill);
+  }
+
+  // AI 助手入口 + 剩余额度角标（数字为当日剩余次数，悬停显示完整文案）。
+  .ai-entry {
+    position: relative;
+    cursor: pointer;
+  }
+
+  .ai-quota-badge {
+    position: absolute;
+    top: -3px;
+    right: -5px;
+    min-width: 16px;
+    height: 16px;
+    padding: 0 4px;
+    border-radius: 8px;
+    background: var(--el-color-primary);
+    color: #fff;
+    font-size: 10px;
+    line-height: 16px;
+    text-align: center;
+    pointer-events: none;
   }
 
   .lang-switcher {

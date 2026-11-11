@@ -1,3 +1,9 @@
+# 入口 HTML 永不缓存：每次都拿最新的 index.html，JS 文件名带 hash，旧 JS 不会再被引用。
+# （根因：浏览器缓存了旧 index.html，里面引用已不存在的旧 chunk，滚动条修复一直看不到。）
+/index.html
+  Cache-Control: no-cache, no-store, must-revalidate
+/
+  Cache-Control: no-cache, no-store, must-revalidate
 /assets/*
   Cache-Control: public, max-age=31556952, immutable
 /tinymce/*

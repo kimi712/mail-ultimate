@@ -55,10 +55,10 @@ async function makeUser(email) {
 	const ip = nextIp();
 	const reg = await register(email, ip);
 	expect(reg.json.code).toBe(200);
-	const loginRes = await login(email, ip);
-	expect(loginRes.json.code).toBe(200);
+	// 注册即自动登录：直接用注册返回的 token，不再单独登录（注册已签发会话）。
+	expect(reg.json.data.token).toBeTruthy();
 	const row = await env.db.prepare('SELECT user_id FROM user WHERE email = ?').bind(email).first();
-	return { token: loginRes.json.data.token, userId: row.user_id, ip };
+	return { token: reg.json.data.token, userId: row.user_id, ip };
 }
 
 const SETTING_COLUMN_MAP = {

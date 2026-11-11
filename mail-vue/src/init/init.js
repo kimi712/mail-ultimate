@@ -7,9 +7,27 @@ import {permsToRouter} from "@/perm/perm.js";
 import router from "@/router";
 import {websiteConfig} from "@/request/setting.js";
 import i18n from "@/i18n/index.js";
-import { applyLocale, syncLocaleWithServer, readStoredLocale, detectBrowserLocale, normalizeLocale } from "@/i18n/locale.js";
+import { applyLocale, syncLocaleWithServer, readStoredLocale, normalizeLocale } from "@/i18n/locale.js";
 import { loadPrefs, applyPrefs, resolveDark } from "@/utils/preferences.js";
 import { applyWallpaper, loadStoredWallpaper, syncWallpaperWithServer } from "@/utils/wallpaper.js";
+
+// 浏览器语言完整匹配：navigator.languages 按偏好顺序逐个归一化到 14 语种短码，
+// 任一匹配即返回；全不匹配返回 null（调用方再回落中文）。
+// 不用 i18n/locale.js 的 detectBrowserLocale（它只分 zh/en，见 init 内注释）。
+function detectBrowserShort() {
+    try {
+        const candidates = [];
+        if (Array.isArray(navigator.languages)) candidates.push(...navigator.languages);
+        if (navigator.language) candidates.push(navigator.language);
+        for (const lang of candidates) {
+            const short = normalizeLocale(lang);
+            if (short) return short;
+        }
+    } catch (e) {
+        // 忽略，调用方回落中文
+    }
+    return null;
+}
 
 export async function init() {
     document.title = '\u200B'
@@ -19,11 +37,13 @@ export async function init() {
     const accountStore = useAccountStore();
 
     const token = localStorage.getItem('token');
-    // Phase 2 A 路补充：语言初始化。优先级：localStorage mail-locale >
-    // 旧 settingStore.lang（pinia 持久化）> 浏览器；非默认语言按需懒加载。
+    // Phase 8 H 路：默认语言按浏览器语言走（navigator.languages 依次匹配 14 语种），
+    // 匹配不到才回落中文；用户在设置里改过（localStorage mail-locale / 后端
+    // user.locale）则以用户选择为准。注意：i18n/locale.js 的 detectBrowserLocale
+    // 目前只分 zh/en（共享文件，本次不碰），这里不用它，改走下面的完整匹配。
     const initialShort = readStoredLocale()
         || (settingStore.lang || null)
-        || normalizeLocale(detectBrowserLocale())
+        || detectBrowserShort()
         || 'zh';
     await applyLocale(i18n, settingStore, initialShort);
 
@@ -59,12 +79,12 @@ export async function init() {
                 router.addRoute('layout', routerData);
             });
 
-            // Phase 2 A 路补充：已登录时与后端 user.locale 同步——
-            // 后端有值则以其为准回写本地，后端为空则把本地值写到后端。
-            await syncLocaleWithServer({ i18n, settingStore, getLocale, setLocale });
-
-            // Phase 7 壁纸：已登录时与后端 user.wallpaper / user.wallpaper_tags 同步（同款机制）。
-            await syncWallpaperWithServer({ getWallpaper, setWallpaper, isDark: resolveDark(prefs.theme) });
+            // 速度优化：语言/壁纸与后端的对齐是非关键同步，不阻塞首屏挂载。
+            // 本地偏好已在挂载前应用（applyLocale/applyWallpaper）；这里改后台跑，
+            // 若后端值不同再覆盖（与原来一致，只是时机延后到挂载后，首屏少等两次往返）。
+            // 两个函数内部已 try/catch，永不抛错；外层再挂 catch 兜底。
+            syncLocaleWithServer({ i18n, settingStore, getLocale, setLocale }).catch(e => console.error(e));
+            syncWallpaperWithServer({ getWallpaper, setWallpaper, isDark: resolveDark(prefs.theme) }).catch(e => console.error(e));
         }
 
     } else {

@@ -60,6 +60,12 @@ app.put('/user/resetSendCount', async (c) => {
 	return c.json(result.ok());
 });
 
+// 管理员给指定用户解绑 Telegram（权限 user:set-status，见 security.js）。
+app.put('/user/unbindTelegram', async (c) => {
+	await userService.unbindTelegram(c, await c.req.json());
+	return c.json(result.ok());
+});
+
 app.put('/user/restore', async (c) => {
 	await userService.restore(c, await c.req.json());
 	return c.json(result.ok());

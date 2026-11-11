@@ -60,6 +60,11 @@ export function userRestSendCount(userId) {
     return http.put('/user/resetSendCount', {userId})
 }
 
+// 管理员给指定用户解绑 Telegram
+export function userUnbindTelegram(userId) {
+    return http.put('/user/unbindTelegram', {userId})
+}
+
 export function userRestore(userId,type) {
     return http.put('/user/restore', {userId,type})
 }

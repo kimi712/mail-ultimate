@@ -112,21 +112,26 @@ check('SUPPORTED_LOCALES：8 种，语言名用各自母语', () => {
 });
 
 // ---------- preferences.js ----------
-check('loadPrefs：默认 light/舒适/通知开；非法值回落默认', () => {
+// Phase 8 H 路：默认偏好新增 timeZone: 'auto'（跟随浏览器时区）与
+// shortcutsEnabled: true（Gmail 快捷键默认开）；非法值回落默认。
+check('loadPrefs：默认 light/舒适/通知开/时区auto/快捷键开；非法值回落默认', () => {
 	store.clear();
-	assert.deepEqual(prefs.loadPrefs(), { theme: 'light', density: 'comfortable', notice: true });
+	assert.deepEqual(prefs.loadPrefs(), { theme: 'light', density: 'comfortable', notice: true, timeZone: 'auto', shortcutsEnabled: true });
 	store.set('mail-prefs', JSON.stringify({ theme: 'dark', density: 'compact', notice: false }));
-	assert.deepEqual(prefs.loadPrefs(), { theme: 'dark', density: 'compact', notice: false });
-	store.set('mail-prefs', JSON.stringify({ theme: 'nope', density: 'wide', notice: 'yes' }));
-	assert.deepEqual(prefs.loadPrefs(), { theme: 'light', density: 'comfortable', notice: true });
+	assert.deepEqual(prefs.loadPrefs(), { theme: 'dark', density: 'compact', notice: false, timeZone: 'auto', shortcutsEnabled: true });
+	store.set('mail-prefs', JSON.stringify({ theme: 'nope', density: 'wide', notice: 'yes', timeZone: 'Not/AZone', shortcutsEnabled: 'yes' }));
+	assert.deepEqual(prefs.loadPrefs(), { theme: 'light', density: 'comfortable', notice: true, timeZone: 'auto', shortcutsEnabled: true });
 	store.set('mail-prefs', '{broken json');
-	assert.deepEqual(prefs.loadPrefs(), { theme: 'light', density: 'comfortable', notice: true });
+	assert.deepEqual(prefs.loadPrefs(), { theme: 'light', density: 'comfortable', notice: true, timeZone: 'auto', shortcutsEnabled: true });
+	store.set('mail-prefs', JSON.stringify({ timeZone: 'Asia/Tokyo', shortcutsEnabled: false }));
+	assert.deepEqual(prefs.loadPrefs().timeZone, 'Asia/Tokyo');
+	assert.deepEqual(prefs.loadPrefs().shortcutsEnabled, false);
 });
 
 check('savePrefs/loadPrefs：往返一致', () => {
 	store.clear();
 	prefs.savePrefs({ theme: 'system', density: 'compact', notice: false });
-	assert.deepEqual(prefs.loadPrefs(), { theme: 'system', density: 'compact', notice: false });
+	assert.deepEqual(prefs.loadPrefs(), { theme: 'system', density: 'compact', notice: false, timeZone: 'auto', shortcutsEnabled: true });
 });
 
 check('resolveDark：light/dark 直接取值，system 跟随系统', () => {

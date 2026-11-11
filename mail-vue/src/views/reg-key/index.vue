@@ -106,6 +106,7 @@ import {regKeyAdd, regKeyList, regKeyClearNotUse, regKeyDelete, regKeyHistory} f
 import {getTextWidth} from "@/utils/text.js";
 import dayjs from "dayjs";
 import {tzDayjs} from "@/utils/day.js";
+import { formatDate, formatDateTime } from "@/utils/datetime.js";
 import {useI18n} from "vue-i18n";
 
 defineOptions({
@@ -191,28 +192,10 @@ const compareByLengthAndUpperCase = (a, b, key) => {
 };
 
 function formatUserCreateTime(regKey) {
-  const createTime = tzDayjs(regKey.createTime);
+  // Phase 8 H 路：按当前 locale 显示（之前 zh/en 两套写死格式）
   const currentYear = dayjs().year();
-  const expireYear = createTime.year();
-
-  if (settingStore.lang === 'en') {
-
-    if (expireYear === currentYear) {
-      return createTime.format('MMM D, HH:mm');
-    } else {
-      return createTime.format('MMM D, YYYY HH:mm');
-    }
-
-  } else {
-
-    if (expireYear === currentYear) {
-      return createTime.format('M月D日 HH:mm');
-    } else {
-      return createTime.format('YYYY年M月D日 HH:mm');
-    }
-
-  }
-
+  const createYear = tzDayjs(regKey.createTime).year();
+  return formatDateTime(regKey.createTime, { withYear: createYear !== currentYear });
 }
 
 function toExpireUtc(expireTime) {
@@ -220,23 +203,11 @@ function toExpireUtc(expireTime) {
 }
 
 function formatExpireTime(expireTime) {
+  // Phase 8 H 路：按当前 locale 显示（之前 zh/en 两套写死格式）
   const expireDate = tzDayjs(expireTime).subtract(1, 'second');
   const currentYear = dayjs().year();
   const expireYear = expireDate.year();
-
-  if (settingStore.lang === 'en') {
-
-    return expireYear === currentYear
-        ? expireDate.format('MMM D')
-        : expireDate.format('MMM D, YYYY');
-
-  } else {
-
-    return expireYear === currentYear
-        ? expireDate.format('M月D日')
-        : expireDate.format('YYYY年M月D日');
-
-  }
+  return formatDate(expireDate.toDate(), { withYear: expireYear !== currentYear });
 }
 
 function refresh() {

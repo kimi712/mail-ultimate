@@ -23,18 +23,24 @@ function truncateText(text, maxLength) {
 
 export default function emailMsgTemplate(email, tgMsgTo, tgMsgFrom, tgMsgText) {
 
+	// 斯诺登第二批（v3_15DB）：发件人隐身的信在落盘记录里没有明文发件人，
+	// Telegram 推送不显示真实发件人，只显示占位（真实发件人只在收件人解锁后可见）。
+	const sealedFrom = !email.sendEmail && email.sealedSender ? '🔒 Sealed Sender' : '';
+	const fromName = email.name || sealedFrom;
+	const fromAddr = email.sendEmail || sealedFrom;
+
 	let template = `<b>${escapeHtml(email.subject || '')}</b>`
 
 		if (tgMsgFrom === 'only-name') {
 			template += `
 
-From\u200B：${escapeHtml(email.name || '')}`
+From\u200B：${escapeHtml(fromName)}`
 		}
 
 		if (tgMsgFrom === 'show') {
 			template += `
 
-From\u200B：${escapeHtml(email.name || '')}  &lt;${escapeHtml(email.sendEmail || '')}&gt;`
+From\u200B：${escapeHtml(fromName)}  &lt;${escapeHtml(fromAddr)}&gt;`
 		}
 
 		if(tgMsgTo === 'show' && tgMsgFrom === 'hide') {

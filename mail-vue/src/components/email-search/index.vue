@@ -1,7 +1,11 @@
 <template>
   <div ref="searchRef" class="email-search">
     <div class="search-placeholder" @click="openSearch">
-      <Icon icon="akar-icons:search" width="20" height="20"/>
+      <!-- 两个搜索一眼区分：邮件搜索 = 放大镜 + 小信封（蓝底角标）。 -->
+      <span class="search-badge-icon" aria-hidden="true">
+        <Icon icon="akar-icons:search" width="20" height="20"/>
+        <span class="search-badge search-badge-mail"><Icon icon="material-symbols:mail-outline" width="9" height="9"/></span>
+      </span>
       <span class="search-placeholder-text" :class="{ 'has-search-text': savedSearchSummary }" :title="savedSearchSummary">
         {{ savedSearchSummary || t('searchMail') }}
       </span>
@@ -13,13 +17,21 @@
       :aria-expanded="visible"
       @click="openSearch"
     >
-      <el-icon :size="20">
-        <Icon icon="akar-icons:search"/>
-      </el-icon>
+      <span class="search-badge-icon" aria-hidden="true">
+        <Icon icon="akar-icons:search" width="20" height="20"/>
+        <span class="search-badge search-badge-mail"><Icon icon="material-symbols:mail-outline" width="9" height="9"/></span>
+      </span>
     </el-button>
     <Transition name="search-panel-fade" @after-enter="focusInputOnDesktop">
       <div v-if="visible" class="search-panel-shell" @click.stop>
         <el-card class="search-panel" shadow="always">
+          <div class="search-panel-title">
+            <span class="search-badge-icon" aria-hidden="true">
+              <Icon icon="akar-icons:search" width="18" height="18"/>
+              <span class="search-badge search-badge-mail"><Icon icon="material-symbols:mail-outline" width="9" height="9"/></span>
+            </span>
+            <span>{{ t('searchMail') }}</span>
+          </div>
           <div class="search-input">
             <el-input
               ref="inputRef"
@@ -75,7 +87,7 @@
           </div>
           <div class="search-actions">
             <el-button @click="handleReset">{{ t('reset') }}</el-button>
-            <el-button type="primary" @click="handleSearch">{{ t('search') }}</el-button>
+            <el-button type="primary" @click="handleSearch">{{ t('searchBtn') }}</el-button>
           </div>
         </el-card>
       </div>
@@ -85,6 +97,7 @@
 
 <script setup>
 import {computed, onBeforeUnmount, onMounted, ref, watch} from 'vue'
+import { formatDate } from '@/utils/datetime.js'
 import {Icon} from '@iconify/vue'
 import {useI18n} from 'vue-i18n'
 
@@ -225,7 +238,8 @@ function toLocalSearchDate(dateValue) {
 }
 
 function formatSummaryDate(dateValue) {
-  return toLocalSearchDate(dateValue)
+  // 搜索摘要里的日期按当前 locale 显示（之前写死 YYYY-MM-DD）
+  return formatDate(dateValue)
 }
 
 function handleDocumentKeydown(event) {
@@ -248,8 +262,10 @@ function handleDocumentClick(event) {
     return
   }
 
-  event.preventDefault()
-  event.stopPropagation()
+  // 任务 3（2026-11-08）：只关闭面板，不拦截点击。
+  // 此前这里 preventDefault + stopPropagation 会在捕获阶段吞掉面板外一切点击——
+  // 搜索面板开着时点顶栏 AI 按钮，点击到不了按钮，AI 面板打不开（用户报“点了没反应”）。
+  // 改成只 closeSearch()，让本次点击继续传到目标按钮（AI 打开、面板同时关闭）。
   closeSearch()
 }
 
@@ -309,12 +325,16 @@ onBeforeUnmount(() => {
 <style lang="scss" scoped>
 .email-search {
   position: absolute;
-  left: -1;
+  left: 0;
   top: 50%;
   transform: translateY(-50%);
   z-index: 10;
-  width: min(450px, calc(100% - 20px));
+  /* 任务 2：面板加宽到 520px，四段分段器 + 两个日期选择器不再挤。 */
+  width: min(520px, calc(100% - 20px));
   height: 36px;
+  @media (max-width: 1280px) {
+    width: min(450px, calc(100% - 20px));
+  }
   @media (max-width: 1080px) {
     width: min(400px, calc(100% - 20px));
   }
@@ -323,6 +343,33 @@ onBeforeUnmount(() => {
 @media (min-width: 768px) {
   .email-search.account-show {
     left: 259px;
+  }
+}
+
+/* account-show（收件箱/已发送/邮件详情页，左侧有 259px 账号栏）时收窄：
+   此前宽度不变（520px），右沿伸到 779px，与左侧 536px 起的功能搜索框重叠
+   240px——功能框盖在上面，把邮件框里伸过 536px 的已保存搜索摘要拦腰切断，
+   半个字被盖住就是顶栏左框文字重叠/糊掉的根因。
+   收窄后右沿与非 account-show 时一致：宽屏 259+261=520（功能框在 552，间距 32px）；
+   1280px 时 259+191=450（功能框在 482，间距 32px）；≤1279px 功能框隐藏，不收窄。 */
+@media (min-width: 1281px) {
+  .email-search.account-show {
+    width: 261px;
+  }
+}
+
+@media (min-width: 1280px) and (max-width: 1280px) {
+  .email-search.account-show {
+    width: 191px;
+  }
+}
+
+/* 面板与触发框解耦：account-show 时触发框收窄到 261/191px，面板仍保持 520px 宽
+  （面板里四段分段器 + 两个日期选择器需要这个宽度）。只在 ≥1280px 生效，
+   窄屏下面板仍跟触发框同宽，不会溢出视口。 */
+@media (min-width: 1280px) {
+  .email-search.account-show .search-panel-shell {
+    width: min(520px, calc(100vw - 279px));
   }
 }
 
@@ -358,6 +405,47 @@ onBeforeUnmount(() => {
   color: var(--el-text-color-primary);
 }
 
+/* 两个搜索一眼区分：邮件搜索 = 放大镜 + 小信封（蓝底角标）；功能搜索是放大镜 + 小齿轮（灰底角标）。 */
+.search-badge-icon {
+  position: relative;
+  display: inline-flex;
+  flex-shrink: 0;
+}
+
+.search-badge {
+  position: absolute;
+  right: -5px;
+  bottom: -4px;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  color: #fff;
+  border: 1.5px solid var(--el-bg-color);
+  box-sizing: border-box;
+}
+
+.search-badge-mail {
+  background: var(--el-color-primary);
+}
+
+.search-badge-gear {
+  background: #7c8698;
+}
+
+/* 面板顶标题：点开后也一眼知道这是哪个搜索。 */
+.search-panel-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 12px 2px;
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--el-text-color-primary);
+}
+
 .mobile-search-button {
   display: none;
 }
@@ -382,13 +470,14 @@ onBeforeUnmount(() => {
     height: 32px;
     padding: 0;
     border: none;
-    background: transparent;
+    /* 邮件搜索：蓝底角标 + 淡蓝底，一眼区别于功能搜索的透明底。 */
+    background: rgba(24, 144, 255, 0.14);
     box-shadow: none;
-    --el-button-bg-color: transparent;
+    --el-button-bg-color: rgba(24, 144, 255, 0.14);
     --el-button-border-color: transparent;
-    --el-button-hover-bg-color: transparent;
+    --el-button-hover-bg-color: rgba(24, 144, 255, 0.22);
     --el-button-hover-border-color: transparent;
-    --el-button-active-bg-color: transparent;
+    --el-button-active-bg-color: rgba(24, 144, 255, 0.26);
     --el-button-active-border-color: transparent;
     --el-button-outline-color: transparent;
   }
@@ -408,7 +497,8 @@ onBeforeUnmount(() => {
   left: 0;
   z-index: 1001;
   width: 100%;
-  background: var(--el-bg-color-overlay);
+  /* 任务 2：背景加兜底，保证面板不透明、盖住下方邮件正文。 */
+  background: var(--el-bg-color-overlay, var(--el-bg-color, #ffffff));
 }
 
 .search-panel {
@@ -474,23 +564,27 @@ onBeforeUnmount(() => {
 
 .custom-style {
   display: flex;
+  flex-wrap: wrap;
   justify-content: flex-start;
   margin-top: 8px;
 }
 
 .custom-style .el-segmented {
   --el-border-radius-base: 6px;
+  max-width: 100%;
 }
 
 .search-date-range {
   display: flex;
+  flex-wrap: wrap;
   gap: 10px;
   margin-top: 20px;
 }
 
 .search-date-field {
-  flex: 1;
-  min-width: 0;
+  /* 任务 2：每栏最少 200px，窄屏时自动换行上下排，不再左右挤扁。 */
+  flex: 1 1 200px;
+  min-width: 200px;
 }
 
 .search-date-label {

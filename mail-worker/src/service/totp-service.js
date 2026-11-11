@@ -11,6 +11,8 @@ import { t } from '../i18n/i18n';
 import fieldCrypto from '../utils/field-crypto';
 import userService from './user-service';
 import cryptoUtils from '../utils/crypto-utils';
+import { encodeQr } from '../utils/qrcode';
+import kernelAudit from '../kernel/audit';
 
 const BASE32_ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ234567';
 const ISSUER = 'aevorynthtech.com';
@@ -144,17 +146,45 @@ const totpService = {
 	// 开通第一步：生成新 secret 并保存（未启用）。已启用用户重开 setup 时
 	// 保留 enabled 标志，直到新 secret 经 enable 验证后才正式替换生效；
 	// 备份码在 enable 成功时才重新生成。
-	async setup(c, userId, email) {
+	// Phase 8 B：
+	// - 换绑（已有 TOTP 启用）必须先验旧码：oldCode 为空或验不过时拒绝，避免
+	//   别人拿到已登录会话就能换掉你的二次验证。
+	// - 返回二维码矩阵 qr（本地编码的 otpauth URL，绝不调用外部二维码 API，
+	//   secret 不发给任何第三方）；超长（otpauth URL 超过 v10-M 容量，实测
+	//   约 213 字节）时 qr 为 null，前端只显示手动输入 secret。
+	// - 密钥只在设置当时返回这一次：enable 成功后前端立即清空 setupData，
+	//   后端不再提供任何读 secret 的接口。
+	async setup(c, userId, email, oldCode) {
+		const row0 = await this.getRow(c, userId);
+		const isRebind = !!row0 && row0.enabled === 1;
+		if (isRebind) {
+			if (!oldCode || !await this.verifyLoginCode(c, userId, oldCode)) {
+				throw new BizError(t('totpOldCodeRequired'), 400);
+			}
+		}
 		const secret = this.generateSecret();
 		const secretEncrypted = await fieldCrypto.encrypt(c, secret);
-		const row = await this.getRow(c, userId);
+		const row = row0;
 		if (row) {
 			await orm(c).update(userTotp).set({ secretEncrypted, backupCodesHash: '[]' })
 				.where(eq(userTotp.userId, userId)).run();
 		} else {
 			await orm(c).insert(userTotp).values({ userId, secretEncrypted, enabled: 0, backupCodesHash: '[]' }).run();
 		}
-		return { secret, otpauthUrl: this.otpauthUrl(secret, email) };
+		const otpauthUrl = this.otpauthUrl(secret, email);
+		let qr = null;
+		try {
+			qr = encodeQr(otpauthUrl);
+		} catch (e) {
+			// 超长时不阻断设置流程，前端降级为手动输入 secret。
+			console.error('TOTP 二维码生成失败（降级为手动输入）:', e.message);
+			qr = null;
+		}
+		await kernelAudit.audit(c, {
+			actorUserId: userId, action: 'totp:setup', targetType: 'totp', targetId: String(userId),
+			detail: { rebind: isRebind, qr: qr ? 1 : 0 }
+		});
+		return { secret, otpauthUrl, qr };
 	},
 
 	// 开通第二步：用当前 secret 验码，通过后启用并返回 10 个一次性备份码（只显示一次）。
@@ -174,6 +204,10 @@ const totpService = {
 		}
 		await orm(c).update(userTotp).set({ enabled: 1, backupCodesHash: JSON.stringify(hashes) })
 			.where(eq(userTotp.userId, userId)).run();
+		await kernelAudit.audit(c, {
+			actorUserId: userId, action: 'totp:enable', targetType: 'totp', targetId: String(userId),
+			detail: {}
+		});
 		return { backupCodes };
 	},
 
@@ -191,6 +225,10 @@ const totpService = {
 			throw new BizError(t('totpInvalidCode'), 400);
 		}
 		await orm(c).delete(userTotp).where(eq(userTotp.userId, userId)).run();
+		await kernelAudit.audit(c, {
+			actorUserId: userId, action: 'totp:disable', targetType: 'totp', targetId: String(userId),
+			detail: {}
+		});
 	},
 
 	// 登录时验码：6 位数字走 TOTP；否则按备份码匹配，命中即作废该码。

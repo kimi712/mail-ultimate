@@ -4,7 +4,20 @@
 export const PREFS_KEY = 'mail-prefs';
 export const THEME_MODES = ['light', 'dark', 'system'];
 export const DENSITIES = ['comfortable', 'compact'];
-export const DEFAULT_PREFS = { theme: 'light', density: 'comfortable', notice: true };
+// Phase 8 H 路：timeZone（'auto' = 跟随浏览器时区；其余为 IANA 时区名）与
+// shortcutsEnabled（Gmail 快捷键开关，默认开）进同一 mail-prefs 存储。
+export const DEFAULT_PREFS = { theme: 'light', density: 'comfortable', notice: true, timeZone: 'auto', shortcutsEnabled: true };
+
+function normalizeTimeZone(value) {
+	if (!value || typeof value !== 'string') return DEFAULT_PREFS.timeZone;
+	if (value === 'auto') return 'auto';
+	try {
+		Intl.DateTimeFormat('en-US', { timeZone: value });
+		return value;
+	} catch (e) {
+		return DEFAULT_PREFS.timeZone;
+	}
+}
 
 export function loadPrefs() {
 	let raw = null;
@@ -25,7 +38,9 @@ export function loadPrefs() {
 	return {
 		theme: THEME_MODES.includes(parsed.theme) ? parsed.theme : DEFAULT_PREFS.theme,
 		density: DENSITIES.includes(parsed.density) ? parsed.density : DEFAULT_PREFS.density,
-		notice: typeof parsed.notice === 'boolean' ? parsed.notice : DEFAULT_PREFS.notice
+		notice: typeof parsed.notice === 'boolean' ? parsed.notice : DEFAULT_PREFS.notice,
+		timeZone: normalizeTimeZone(parsed.timeZone),
+		shortcutsEnabled: typeof parsed.shortcutsEnabled === 'boolean' ? parsed.shortcutsEnabled : DEFAULT_PREFS.shortcutsEnabled
 	};
 }
 
@@ -115,7 +130,9 @@ export function applyPrefs(prefs, uiStore) {
 	const safe = {
 		theme: THEME_MODES.includes(prefs?.theme) ? prefs.theme : DEFAULT_PREFS.theme,
 		density: DENSITIES.includes(prefs?.density) ? prefs.density : DEFAULT_PREFS.density,
-		notice: typeof prefs?.notice === 'boolean' ? prefs.notice : DEFAULT_PREFS.notice
+		notice: typeof prefs?.notice === 'boolean' ? prefs.notice : DEFAULT_PREFS.notice,
+		timeZone: normalizeTimeZone(prefs?.timeZone),
+		shortcutsEnabled: typeof prefs?.shortcutsEnabled === 'boolean' ? prefs.shortcutsEnabled : DEFAULT_PREFS.shortcutsEnabled
 	};
 	syncSystemThemeListener(safe.theme, uiStore);
 	applyThemeOnly(resolveDark(safe.theme), uiStore);

@@ -2,11 +2,11 @@
   <!-- 产品自己的开场动画（不是广告位，无任何推广/外部内容）。
        全屏覆盖在登录页之上；登录表单在遮罩下正常挂载加载，不被阻塞。 -->
   <transition name="intro-fade" @after-leave="onAfterLeave">
-    <div v-if="visible" class="intro-overlay" role="dialog" :aria-label="$t('intro.skip')" @click.self="dismiss(false)">
-      <div class="intro-vista" aria-hidden="true"></div>
+    <div v-if="visible" class="intro-overlay" role="dialog" :aria-label="$t('intro.skip')" @click.self="dismiss()">
+      <div class="intro-vista" aria-hidden="true" :style="{ backgroundImage: `url('/wallpapers/${introWallpaper}')` }"></div>
       <div class="intro-shade" aria-hidden="true"></div>
 
-      <button class="intro-skip" type="button" @click="dismiss(false)">{{ $t('intro.skip') }}</button>
+      <button class="intro-skip" type="button" @click="dismiss()">{{ $t('intro.skip') }}</button>
 
       <div class="intro-center">
         <span class="intro-badge" aria-hidden="true">
@@ -22,7 +22,7 @@
             <path d="M9 13l9 6 9-6" stroke="#fff" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" />
           </svg>
         </span>
-        <h1 class="intro-brand"><span class="intro-brand-text">{{ brandTitle }}</span></h1>
+        <h1 class="intro-brand" :class="{ 'title-display': titleUsesDisplayFont }"><span class="intro-brand-text">{{ brandTitle }}</span></h1>
       </div>
 
       <div class="intro-quote-wrap">
@@ -35,10 +35,6 @@
         </transition>
       </div>
 
-      <label class="intro-nomore">
-        <input type="checkbox" v-model="doNotShowAgain" />
-        <span>{{ $t('intro.doNotShowAgain') }}</span>
-      </label>
     </div>
   </transition>
 </template>
@@ -64,8 +60,26 @@ const QUOTES = [
   },
 ]
 
-const DISMISSED_KEY = 'mail-intro-dismissed'
-// 每句名言 5 秒，三句共 15 秒；总时长 16 秒，留 1 秒给品牌字标收尾；可跳过。
+// 开场背景：15 张斯诺登远景同款壁纸，每次进入随机挑一张，不再固定 snowden-vista。
+const SNOWDEN_WALLPAPERS = [
+  'snowden-vista.jpg',
+  'snowden-02.jpg',
+  'snowden-03.jpg',
+  'snowden-04.jpg',
+  'snowden-05.jpg',
+  'snowden-06.jpg',
+  'snowden-07.jpg',
+  'snowden-08.jpg',
+  'snowden-09.jpg',
+  'snowden-10.jpg',
+  'snowden-11.jpg',
+  'snowden-18.jpg',
+  'snowden-19.jpg',
+  'snowden-20.jpg',
+  'snowden-21.jpg',
+]
+const introWallpaper = SNOWDEN_WALLPAPERS[Math.floor(Math.random() * SNOWDEN_WALLPAPERS.length)]
+
 const AUTO_DISMISS_MS = 16000
 const QUOTE_INTERVAL_MS = 5000
 
@@ -74,25 +88,36 @@ const settingStore = useSettingStore()
 // 配置未加载完成前先用 Mail 占位，配置到达后自动更新。
 const brandTitle = computed(() => settingStore.settings?.title || 'Mail')
 
-let dismissed = false
-try {
-  dismissed = localStorage.getItem(DISMISSED_KEY) === '1'
-} catch (e) { /* 无痕/禁用存储时照常显示一次 */ }
+// 任务 4：品牌标题不含汉字时才用展示字体（与侧栏/登录页同规则）。
+const titleUsesDisplayFont = computed(() => !/\p{Script=Han}/u.test(settingStore.settings?.title || ''))
 
-const visible = ref(!dismissed)
-const doNotShowAgain = ref(false)
+// 2026-11-09 用户定：开场动画默认不再自动播放，进站直接显示登录；
+// 想看时点登录页底部的“观看开场动画”手动打开（登录页通过 ref 调 open()）。
+const visible = ref(false)
 const quoteIndex = ref(0)
 
 let rotateTimer = null
 let dismissTimer = null
 
-function dismiss(persist) {
+function startTimers() {
+  stopTimers()
+  quoteIndex.value = 0
+  rotateTimer = setInterval(() => {
+    quoteIndex.value = (quoteIndex.value + 1) % QUOTES.length
+  }, QUOTE_INTERVAL_MS)
+  dismissTimer = setTimeout(() => dismiss(), AUTO_DISMISS_MS)
+}
+
+function open() {
+  if (visible.value) return
+  visible.value = true
+  startTimers()
+}
+
+defineExpose({ open })
+
+function dismiss() {
   if (!visible.value) return
-  if (persist || doNotShowAgain.value) {
-    try {
-      localStorage.setItem(DISMISSED_KEY, '1')
-    } catch (e) { /* 存储失败不影响本次跳过 */ }
-  }
   visible.value = false
 }
 
@@ -101,7 +126,7 @@ function onAfterLeave() {
 }
 
 function onKeydown(e) {
-  if (e.key === 'Escape') dismiss(false)
+  if (e.key === 'Escape') dismiss()
 }
 
 function stopTimers() {
@@ -110,11 +135,6 @@ function stopTimers() {
 }
 
 onMounted(() => {
-  if (!visible.value) return
-  rotateTimer = setInterval(() => {
-    quoteIndex.value = (quoteIndex.value + 1) % QUOTES.length
-  }, QUOTE_INTERVAL_MS)
-  dismissTimer = setTimeout(() => dismiss(false), AUTO_DISMISS_MS)
   window.addEventListener('keydown', onKeydown)
 })
 
@@ -140,9 +160,13 @@ onUnmounted(() => {
 .intro-vista {
   position: absolute;
   inset: -4%;
-  background: url('/wallpapers/snowden-vista.jpg') center / cover no-repeat;
-  /* 默认壁纸：缓慢缩放 + 平移的电影感运镜，8 秒走完一个镜头 */
-  animation: intro-kenburns 8s ease-out both;
+  /* 背景图由 :style 随机绑定（11 张斯诺登同款之一），这里只定位置与铺满方式 */
+  background: center / cover no-repeat;
+  /* 16 秒两程运镜（与 AUTO_DISMISS_MS=16000 对齐，全程不停）：
+     0–8s 第一程 scale 1.02→1.12 + 向左上平移；
+     8–16s 第二程继续同向平移 + 轻微缩放至 1.18，50% 关键帧保证衔接无跳变；
+     linear 保证全程匀速、不在 8s 处停顿。 */
+  animation: intro-kenburns 16s linear both;
 }
 
 .intro-shade {
@@ -153,8 +177,11 @@ onUnmounted(() => {
 }
 
 @keyframes intro-kenburns {
-  from { transform: scale(1.02) translate(0, 0); }
-  to { transform: scale(1.12) translate(-1.2%, -1.5%); }
+  0% { transform: scale(1.02) translate(0, 0); }
+  /* 8s：第一程终点，同时是第二程起点，数值连续、无跳变 */
+  50% { transform: scale(1.12) translate(-1.2%, -1.5%); }
+  /* 16s：第二程终点，继续同向平移 + 轻微缩放 */
+  100% { transform: scale(1.18) translate(-2.4%, -2.8%); }
 }
 
 .intro-skip {
@@ -198,12 +225,27 @@ onUnmounted(() => {
 
 .intro-brand {
   margin: 0;
-  font-size: clamp(34px, 6vw, 56px);
+  font-size: clamp(40px, 7vw, 68px);
   font-weight: 700;
   letter-spacing: 0.06em;
   line-height: 1.15;
   text-shadow: 0 2px 28px rgba(0, 0, 0, 0.6);
-  animation: intro-rise 0.9s ease-out 0.9s both;
+  /* 入场 0.9s 上浮（不变）+ 8s 起极轻微呼吸光晕（5s 一周期，无限循环，
+     只动 text-shadow，不碰 transform/opacity，与入场动画无冲突） */
+  animation:
+    intro-rise 0.9s ease-out 0.9s both,
+    intro-breathe 5s ease-in-out 8s infinite;
+}
+
+@keyframes intro-breathe {
+  0%, 100% { text-shadow: 0 2px 28px rgba(0, 0, 0, 0.6); }
+  50% { text-shadow: 0 2px 28px rgba(0, 0, 0, 0.6), 0 0 44px rgba(165, 180, 252, 0.35); }
+}
+
+/* 任务 4：非汉字品牌标题用展示字体（Bebas Neue / Montserrat），够大够粗。 */
+.intro-brand.title-display {
+  font-family: var(--font-display);
+  letter-spacing: 0.08em;
 }
 
 .intro-brand-text {
@@ -213,8 +255,14 @@ onUnmounted(() => {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  /* 品牌字标呈现后，一道光效从左至右扫过 */
-  animation: intro-shine 1.6s ease-in-out 2.1s both;
+  /* 光效扫过字标：首道 2.1s（第一幕入场后，原样保留）；
+     第二幕再各一道轻微扫过——8s 与 13s 各 1.2s；
+     同一 intro-shine 复用三遍，首尾位置（120% / -120%）光带都在字外，
+     复位不可见、不刺眼。 */
+  animation:
+    intro-shine 1.6s ease-in-out 2.1s both,
+    intro-shine 1.2s ease-in-out 8s both,
+    intro-shine 1.2s ease-in-out 13s both;
 }
 
 @keyframes intro-rise {
@@ -229,9 +277,14 @@ onUnmounted(() => {
 
 .intro-quote-wrap {
   position: absolute;
-  left: 50%;
+  left: 0;
+  right: 0;
   bottom: 12%;
-  transform: translateX(-50%);
+  /* 居中不用 left:50% + translateX(-50%)：入场动画 intro-rise（fill both）
+     的终态 transform: translateY(0) 会覆盖 base 的 translateX(-50%），
+     导致整块名言右移半个身位、右缘被裁（PHASE7 遗留 bug，实测 rect.x=640）。
+     改用 left/right:0 + margin auto 居中，动画只动 Y 轴，不再打架。 */
+  margin-inline: auto;
   width: min(860px, 88vw);
   text-align: center;
   animation: intro-rise 0.9s ease-out 1.4s both;
@@ -281,9 +334,12 @@ onUnmounted(() => {
   cursor: pointer;
 }
 
-/* 名言淡入淡出轮换 */
-.quote-fade-enter-active, .quote-fade-leave-active { transition: opacity 0.6s ease; }
-.quote-fade-enter-from, .quote-fade-leave-to { opacity: 0; }
+/* 名言轮换：上浮 + 淡入（不只是透明度变化）。
+   旧句向上浮出、新句从下方浮入；每句 5 秒（QUOTE_INTERVAL_MS），
+   mode="out-in" 下离场 0.6s + 入场 0.6s。 */
+.quote-fade-enter-active, .quote-fade-leave-active { transition: opacity 0.6s ease, transform 0.6s ease; }
+.quote-fade-enter-from { opacity: 0; transform: translateY(14px); }
+.quote-fade-leave-to { opacity: 0; transform: translateY(-10px); }
 
 /* 整层淡入淡出（出现 0.6 秒，消失 0.5 秒） */
 .intro-fade-enter-active { transition: opacity 0.6s ease; }
@@ -293,6 +349,12 @@ onUnmounted(() => {
 @media (prefers-reduced-motion: reduce) {
   .intro-vista, .intro-badge, .intro-brand, .intro-brand-text, .intro-quote-wrap {
     animation: none !important;
+  }
+  /* 呼吸光晕随 .intro-brand 的 animation:none 一并停用；
+     名言轮换与整层淡入淡出也改为瞬时切换，不留 transform/opacity 过渡。 */
+  .quote-fade-enter-active, .quote-fade-leave-active,
+  .intro-fade-enter-active, .intro-fade-leave-active {
+    transition: none !important;
   }
 }
 </style>

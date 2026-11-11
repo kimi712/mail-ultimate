@@ -3,6 +3,7 @@ import loginLog from '../entity/login-log';
 import { count, desc, eq } from 'drizzle-orm';
 import reqUtils from '../utils/req-utils';
 import settingService from './setting-service';
+import userContext from '../security/user-context';
 
 // Phase 6：setting.log_ip_mask=1 时写入前对 ip 列脱敏。
 async function maybeMaskIp(c, ip) {
@@ -36,6 +37,10 @@ const loginLogService = {
 	},
 
 	async listByUser(c, userId, { num = 1, size = 50 } = {}) {
+		// 诱饵会话（v3_16DB）：登录历史为空（不透露真实登录 IP/设备）。
+		if (userContext.isDecoy(c)) {
+			return { list: [], total: 0 };
+		}
 		size = Number(size);
 		num = Number(num);
 		if (isNaN(size)) {

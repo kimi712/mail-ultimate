@@ -26,6 +26,46 @@ export function setWallpaper(wallpaper, wallpaperTags = []) {
     return http.post('/my/wallpaper', {wallpaper, wallpaperTags}, {noMsg: true})
 }
 
+// 用户自助绑定 Telegram（后端 user.tg_chat_id / tg_bind_code，v3_13DB）。
+// noMsg：错误由调用方按需提示，避免拦截器与组件重复弹错。
+export function getTelegramStatus() {
+    return http.get('/my/telegram', {noMsg: true})
+}
+
+export function createTelegramBindCode() {
+    return http.post('/my/telegram/bind-code', {}, {noMsg: true})
+}
+
+export function unbindTelegram() {
+    return http.post('/my/telegram/unbind', {}, {noMsg: true})
+}
+
+// 一次性别名邮箱（后端 email_alias 表）：列表 / 生成 / 停用 / 启用 / 删除。
+export function getAliasList() {
+    return http.get('/my/alias', {noMsg: true})
+}
+
+export function createAlias() {
+    return http.post('/my/alias', {}, {noMsg: true})
+}
+
+export function disableAlias(aliasId) {
+    return http.post(`/my/alias/${aliasId}/disable`, {}, {noMsg: true})
+}
+
+export function enableAlias(aliasId) {
+    return http.post(`/my/alias/${aliasId}/enable`, {}, {noMsg: true})
+}
+
+export function deleteAlias(aliasId) {
+    return http.delete(`/my/alias/${aliasId}`, {noMsg: true})
+}
+
+// 金丝雀声明日期（安全中心展示）。
+export function getCanary() {
+    return http.get('/my/canary', {noMsg: true})
+}
+
 export function resetPassword(password) {
     return http.put('/my/resetPassword', {password})
 }

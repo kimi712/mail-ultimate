@@ -1,7 +1,8 @@
-// 语言偏好工具（Phase 2 A 路补充：8 语种）。
+// 语言偏好工具（Phase 2 A 路补充：8 语种；2026-11-10 扩到 14 语种，
+// 新增 pt/id/de/ar/hi/th；ar 为 RTL 语言，切换时同步 document.dir）。
 // 本模块是纯函数，不 import i18n / store / request，避免循环依赖
 // （i18n/index.js 与 axios 互相引用，request 层又依赖 axios）。
-// 内部短码（zh/en/ja/ko/vi/ru/es/fr）与既有代码的 settingStore.lang、$t 保持一致；
+// 内部短码（zh/en/ja/ko/vi/ru/es/fr/pt/id/de/ar/hi/th）与既有代码的 settingStore.lang、$t 保持一致；
 // 对外存储值（localStorage mail-locale、后端 user.locale）用完整码，中文为 zh-CN。
 export const STORAGE_KEY = 'mail-locale';
 
@@ -13,7 +14,13 @@ export const SUPPORTED_LOCALES = [
 	{ code: 'vi', short: 'vi', label: 'Tiếng Việt' },
 	{ code: 'ru', short: 'ru', label: 'Русский' },
 	{ code: 'es', short: 'es', label: 'Español' },
-	{ code: 'fr', short: 'fr', label: 'Français' }
+	{ code: 'fr', short: 'fr', label: 'Français' },
+	{ code: 'pt', short: 'pt', label: 'Português' },
+	{ code: 'id', short: 'id', label: 'Bahasa Indonesia' },
+	{ code: 'de', short: 'de', label: 'Deutsch' },
+	{ code: 'ar', short: 'ar', label: 'العربية', rtl: true },
+	{ code: 'hi', short: 'hi', label: 'हिन्दी' },
+	{ code: 'th', short: 'th', label: 'ไทย' }
 ];
 
 export const STORED_CODES = SUPPORTED_LOCALES.map(item => item.code);
@@ -47,11 +54,19 @@ export function toStoredLocale(short) {
 	return found ? found.code : 'en';
 }
 
-// 浏览器语言：以 zh 开头 → zh-CN，否则 en（契约条文）；返回对外存储值。
+// 浏览器语言：按 navigator.languages 偏好顺序逐个归一化匹配 14 语种，
+// 匹配不到才回落 'en'（旧逻辑只分 zh/en，日语浏览器会被误判成英文）。
+// 返回对外存储值；调用方再经 normalizeLocale() 转内部短码。
 export function detectBrowserLocale() {
 	try {
-		const lang = (navigator.language || '').toLowerCase();
-		return lang.startsWith('zh') ? 'zh-CN' : 'en';
+		const langs = (navigator.languages && navigator.languages.length ? navigator.languages : [navigator.language || ''])
+		for (const lang of langs) {
+			const short = normalizeLocale(lang);
+			if (short) {
+				return toStoredLocale(short);
+			}
+		}
+		return 'en';
 	} catch (e) {
 		return 'en';
 	}
@@ -73,7 +88,7 @@ export function writeStoredLocale(short) {
 	}
 }
 
-// zh/en 随首屏打包；其余 6 种按需懒加载（显式 import 表，Vite 各自打独立 chunk，
+// zh/en 随首屏打包；其余 12 种按需懒加载（显式 import 表，Vite 各自打独立 chunk，
 // 首屏不新增外部请求）。
 const loaders = {
 	ja: () => import('./ja.js'),
@@ -81,7 +96,13 @@ const loaders = {
 	vi: () => import('./vi.js'),
 	ru: () => import('./ru.js'),
 	es: () => import('./es.js'),
-	fr: () => import('./fr.js')
+	fr: () => import('./fr.js'),
+	pt: () => import('./pt.js'),
+	id: () => import('./id.js'),
+	de: () => import('./de.js'),
+	ar: () => import('./ar.js'),
+	hi: () => import('./hi.js'),
+	th: () => import('./th.js')
 };
 const loadedShorts = new Set(['zh', 'en']);
 
@@ -109,6 +130,15 @@ export async function applyLocale(i18n, settingStore, short) {
 		settingStore.lang = target;
 	}
 	writeStoredLocale(target);
+	// html lang 跟界面语言同步：否则 Chrome 会弹“翻译网页吗？”（见 index.html 内联脚本）。
+	// RTL 语言（阿拉伯语）同步 document.dir，整站布局自动镜像；切回其它语言时恢复 ltr。
+	try {
+		document.documentElement.lang = toStoredLocale(target);
+		const entry = SUPPORTED_LOCALES.find(item => item.short === target);
+		document.documentElement.dir = entry && entry.rtl ? 'rtl' : 'ltr';
+	} catch (e) {
+		// 非浏览器环境忽略
+	}
 	return target;
 }
 

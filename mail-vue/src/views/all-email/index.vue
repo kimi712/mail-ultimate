@@ -45,7 +45,7 @@
             </div>
           </template>
         </el-input>
-        <el-select v-model="params.type" placeholder="Select" class="status-select" @change="typeSelectChange">
+        <el-select v-model="params.type" :placeholder="$t('select')" class="status-select" @change="typeSelectChange">
           <el-option key="1" :label="$t('all')" value="all"/>
           <el-option key="3" :label="$t('received')" value="receive"/>
           <el-option key="2" :label="$t('sent')" value="send"/>
@@ -91,7 +91,7 @@
 <script setup>
 import {starAdd, starCancel} from "@/request/star.js";
 import emailScroll from "@/components/email-scroll/index.vue"
-import {computed, defineOptions, reactive, ref, watch, onMounted} from "vue";
+import {computed, defineOptions, reactive, ref, watch, onMounted, onUnmounted} from "vue";
 import {useEmailStore} from "@/store/email.js";
 import {
   allEmailList,
@@ -104,6 +104,7 @@ import router from "@/router/index.js";
 import {useI18n} from 'vue-i18n';
 import {toUtc} from "@/utils/day.js";
 import {sleep} from "@/utils/time-utils.js";
+import { notifyNewMail } from "@/utils/mail-notify.js";
 import {useSettingStore} from "@/store/setting.js";
 import { useRoute } from 'vue-router'
 
@@ -122,8 +123,17 @@ const mySelect = ref()
 const showBathDelete = ref(false)
 const clearLoading = ref(false)
 
+// 速度优化：标签页不可见时暂停轮询（省服务器请求）；切回可见时立即拉一次，不用等满轮询间隔。
+let pollNow = false;
+function onVisibilityChange() {
+  if (!document.hidden) pollNow = true;
+}
 onMounted(() => {
+  document.addEventListener('visibilitychange', onVisibilityChange);
   latest();
+})
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange);
 })
 
 const openSelect = () => {
@@ -303,7 +313,14 @@ async function latest() {
 
     let autoRefresh = settingStore.settings.autoRefresh;
 
-    await sleep(autoRefresh > 1 ? autoRefresh * 1000 : 3000);
+    // 切回可见时跳过等待立即拉一次；标签页不可见时不发请求（省服务器）。
+    if (!pollNow) {
+      await sleep(autoRefresh > 1 ? autoRefresh * 1000 : 3000);
+    }
+    pollNow = false;
+    if (document.hidden) {
+      continue
+    }
 
     const latestId = sysEmailScroll.value.latestEmail?.emailId
 
@@ -343,6 +360,9 @@ async function latest() {
       }
 
       emailStore.applyFullList(list)
+
+      // 本轮新到的邮件：统一弹一次大框提示（多封合并一条），点一下打开该封。
+      notifyNewMail(list, (email) => jumpContent(email));
 
       for (let email of list) {
 

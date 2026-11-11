@@ -13,8 +13,8 @@ export function setSecurity(payload) {
 	return http.post('/my/security', payload, {noMsg: true});
 }
 
-export function totpSetup() {
-	return http.post('/my/totp/setup', {}, {noMsg: true});
+export function totpSetup(oldCode) {
+	return http.post('/my/totp/setup', {oldCode: oldCode || ''}, {noMsg: true});
 }
 
 export function totpEnable(code) {
@@ -58,6 +58,32 @@ export function loginHistory(params) {
 	return http.get('/security/login-history', {params, noMsg: true});
 }
 
+// 斯诺登第二批（v3_15DB）：抗量子 ML-KEM-768 密钥 + 死亡开关。
+// 公钥可公开（发件方按收件地址取）；加密私钥只返回给本人。
+export function getMlkemPubkey(email) {
+	return http.get('/my/security/mlkem-pubkey', {params: {email}, noMsg: true});
+}
+
+export function getMlkemPrivate() {
+	return http.get('/my/security/mlkem-private', {noMsg: true});
+}
+
+export function setMlkemKeys(publicKey, privEnc) {
+	return http.post('/my/security/mlkem-keys', {publicKey, privEnc}, {noMsg: true});
+}
+
+export function getDeadman() {
+	return http.get('/my/deadman', {noMsg: true});
+}
+
+export function setDeadman(payload) {
+	return http.post('/my/deadman', payload, {noMsg: true});
+}
+
+export function disableDeadman() {
+	return http.post('/my/deadman/disable', {}, {noMsg: true});
+}
+
 // Phase 7：闲置锁定后解锁，只校验登录密码，不产生新会话。
 export function unlock(password) {
 	return http.post('/security/unlock', {password}, {noMsg: true});
@@ -66,4 +92,14 @@ export function unlock(password) {
 // Phase 7：导出我的数据（JSON，不含邮件正文与任何密钥材料）。
 export function exportData() {
 	return http.get('/my/export', {noMsg: true});
+}
+
+// Phase 8 B：安全评分（总分 100 + 分项得分 + 改进建议 key 列表）。
+export function getSecurityScore() {
+	return http.get('/security/score', {noMsg: true});
+}
+
+// Phase 8 B：用户侧审计视图（只查本人；type 按白名单前缀筛选）。
+export function myAuditLog(params) {
+	return http.get('/security/audit-log', {params, noMsg: true});
 }

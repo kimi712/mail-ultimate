@@ -1,32 +1,80 @@
 <template>
-  <el-icon class="is-loading" :style="{ fontSize: `${size}px` }">
-    <svg class="circular" viewBox="0 0 20 20">
-      <g
-          class="path2 loading-path"
-          stroke-width="0"
-          style="animation: none; stroke: none"
-      >
-        <circle r="3.375" class="dot1" rx="0" ry="0" />
-        <circle r="3.375" class="dot2" rx="0" ry="0" />
-        <circle r="3.375" class="dot4" rx="0" ry="0" />
-        <circle r="3.375" class="dot3" rx="0" ry="0" />
-      </g>
-    </svg>
-  </el-icon>
+  <div class="loading-wrap">
+    <el-icon class="is-loading" :style="{ fontSize: `${size}px` }">
+      <svg class="circular" viewBox="0 0 20 20">
+        <g
+            class="path2 loading-path"
+            stroke-width="0"
+            style="animation: none; stroke: none"
+        >
+          <circle r="3.375" class="dot1" rx="0" ry="0" />
+          <circle r="3.375" class="dot2" rx="0" ry="0" />
+          <circle r="3.375" class="dot4" rx="0" ry="0" />
+          <circle r="3.375" class="dot3" rx="0" ry="0" />
+        </g>
+      </svg>
+    </el-icon>
+    <!-- Phase 8 斯诺登元素补齐：加载动画下方轮换小字（斯诺登主题短句，非引言原文，故不用引号、不署名；每 4 秒换一句）。 -->
+    <transition name="loading-gloss-fade" mode="out-in">
+      <div v-if="showQuote" class="loading-gloss" :key="glossIndex">{{ currentGloss }}</div>
+    </transition>
+  </div>
 </template>
 
 <script>
+const LOADING_GLOSSES = ['loadingGloss1', 'loadingGloss2', 'loadingGloss3']
+
 export default {
   props: {
     size: {
       type: Number,
       default: 30
+    },
+    showQuote: {
+      type: Boolean,
+      default: true
     }
+  },
+  data() {
+    return {
+      glossIndex: 0,
+      glossTimer: null
+    }
+  },
+  computed: {
+    currentGloss() {
+      return this.$t(LOADING_GLOSSES[this.glossIndex])
+    }
+  },
+  mounted() {
+    this.glossTimer = setInterval(() => {
+      this.glossIndex = (this.glossIndex + 1) % LOADING_GLOSSES.length
+    }, 4000)
+  },
+  beforeUnmount() {
+    if (this.glossTimer) clearInterval(this.glossTimer)
   }
 }
 </script>
 
 <style scoped>
+/* Phase 8 斯诺登元素补齐：加载小字——纵向排列，动画在上、小字在下 */
+.loading-wrap {
+  display: inline-flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+}
+.loading-gloss {
+  max-width: 320px;
+  font-size: 12px;
+  font-style: italic;
+  line-height: 1.5;
+  text-align: center;
+  color: var(--el-text-color-placeholder);
+}
+.loading-gloss-fade-enter-active, .loading-gloss-fade-leave-active { transition: opacity .5s ease; }
+.loading-gloss-fade-enter-from, .loading-gloss-fade-leave-to { opacity: 0; }
 .el-select-dropdown__loading {
   display: flex;
   justify-content: center;

@@ -23,3 +23,8 @@ export function deleteBackground() {
 export function setBlackList(params) {
     return http.put('/setting/setBlacklist', params)
 }
+
+// 管理员把 Telegram webhook 指到本站域名
+export function setTelegramWebhook() {
+    return http.post('/setting/tgWebhook', {})
+}

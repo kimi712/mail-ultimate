@@ -1,3 +1,20 @@
+/* 任务 4：品牌展示字体——Bebas Neue（标题）与 Montserrat Bold（标题粗体），文件在 public/fonts/，随构建一并打包。 */
+@font-face {
+    font-family: "Bebas Neue";
+    src: url("/fonts/BebasNeue-Regular.ttf") format("truetype");
+    font-weight: 400;
+    font-style: normal;
+    font-display: swap;
+}
+
+@font-face {
+    font-family: "Montserrat";
+    src: url("/fonts/Montserrat-Bold.ttf") format("truetype");
+    font-weight: 700;
+    font-style: normal;
+    font-display: swap;
+}
+
 * {
     margin: 0;
     padding: 0;
@@ -106,6 +123,8 @@ button, input, select, textarea {
 }
 
 :root {
+    /* 任务 4：品牌标题展示字体栈（拉丁字母走 Bebas/Montserrat，汉字回落系统字体）。 */
+    --font-display: "Bebas Neue", "Montserrat", Inter, "Helvetica Neue", Helvetica, "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
     --el-color-primary: #1890ff;
     --el-color-primary-dark-2: #1064c0;
     --el-color-primary-light-3: #4dabff;
@@ -244,14 +263,23 @@ html[data-density="compact"] .email-row.all-email {
 /* Phase 7 壁纸：全站背景层（登录页与邮箱共用，默认斯诺登远景）。
    背景图由 utils/wallpaper.js 写进 --wallpaper-url；浅色加一层淡白遮罩、
    深色加一层半透明黑遮罩（额外压暗）保证文字可读。
-   z-index: -1：贴在 body 背景之上、#app 内容之下，只在内容透明处透出，
-   登录表单卡片本身保持不透明，不会被盖住。 */
+   关键：body::before 是 z-index:-1 的 fixed 层，body 本身不建立层叠上下文，
+   所以它参与根层叠上下文、会被 body/html 自身的白色背景盖住（实测截图全白）。
+   因此壁纸生效时必须把 html 与 body 的背景都置透明，否则壁纸永远看不见。 */
+html[data-wallpaper="1"],
+html[data-wallpaper="1"] body {
+    background-color: transparent !important;
+}
+
+/* 壁纸只做一层极淡遮罩，让壁纸本身当主角（对标登录页整幅壁纸的专业感）。 */
 html[data-wallpaper="1"] body::before {
     content: "";
     position: fixed;
     inset: 0;
     z-index: -1;
-    background-image: linear-gradient(rgba(255, 255, 255, 0.22), rgba(255, 255, 255, 0.22)), var(--wallpaper-url);
+    /* 群友反馈：深色壁纸上字看不清——桌面端遮罩只有 0.12，亮部直接糊字；
+       遮罩加深到 0.3，壁纸亮斑先压一档，再由内容区承托。 */
+    background-image: linear-gradient(rgba(0, 0, 0, 0.3), rgba(0, 0, 0, 0.3)), var(--wallpaper-url);
     background-size: cover;
     background-position: center;
     background-repeat: no-repeat;
@@ -259,7 +287,24 @@ html[data-wallpaper="1"] body::before {
 }
 
 html.dark[data-wallpaper="1"] body::before {
-    background-image: linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.55)), var(--wallpaper-url);
+    background-image: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.45)), var(--wallpaper-url);
+}
+
+/* 登录页单层背景慢运镜：只在登录页（<html> 带 page-login，由登录视图挂载时挂上、离开时摘掉），
+   全屏壁纸 45 秒缓慢放大 8% 后再缓慢收回（alternate，无突兀回弹）；手机端同样生效
+   （body::before 本就是 fixed 全屏层）。其余页面（收件箱等）不动。 */
+@keyframes wallpaper-kenburns {
+    0% { transform: scale(1) translate(0, 0); }
+    100% { transform: scale(1.08) translate(-1%, -1.5%); }
+}
+html.page-login[data-wallpaper="1"] body::before {
+    animation: wallpaper-kenburns 45s ease-in-out infinite alternate;
+    will-change: transform;
+}
+@media (prefers-reduced-motion: reduce) {
+    html.page-login[data-wallpaper="1"] body::before {
+        animation: none;
+    }
 }
 
 /* 登录页：去掉不透明渐变底与动画云朵，透出壁纸 */
@@ -271,23 +316,142 @@ html[data-wallpaper="1"] #background-wrap {
     display: none;
 }
 
-/* 邮箱布局：主区与顶栏半透明 + 毛玻璃，透出壁纸 */
+/* 登录页背景只有一层：body::before（壁纸系统，全屏 cover）。左侧开场区不再自己铺图
+   （旧 .showcase-vista 方案：同一张图在两栏里 cover 裁剪不同 + 各自运镜，竖缝明显，已删除）；
+   慢运镜只在登录页生效，见上方 page-login 规则。 */
+
+/* 壁纸模式下登录卡片强制深色：浅色模式下卡片是白底（loginOpacity），
+   配壁纸模式的浅色文字会看不清；壁纸本身是深色氛围图，深色卡片才搭。 */
+html[data-wallpaper="1"] #login-box .container {
+    background: rgba(10, 14, 24, 0.72) !important;
+}
+
+/* 壁纸模式 = 深色毛玻璃主题（对标登录页）：壁纸全幅透出，主区/顶栏/内容区
+   用深色半透明 + 毛玻璃承托，文字改浅色。浅色主题下设壁纸也走这套，
+   因为壁纸本身是深色氛围图，白色面板会把它洗成一片白、看不出换了壁纸。 */
+html[data-wallpaper="1"] {
+    --el-bg-color: rgba(13, 18, 28, 0.55);
+    --el-bg-color-page: rgba(13, 18, 28, 0.4);
+    --el-bg-color-overlay: rgba(20, 26, 38, 0.92);
+    --el-text-color-primary: #f0f2f5;
+    --el-text-color-regular: #d5dae2;
+    --el-text-color-secondary: #c2c9d4;
+    --el-text-color-placeholder: #9aa3b0;
+    --el-text-color-disabled: #6b7280;
+    /* 选中账号卡原来是浅蓝底 + 白字，壁纸模式下看不清，改深蓝半透明。 */
+    --choose-account-background: rgba(37, 99, 235, 0.4);
+    --el-border-color: rgba(255, 255, 255, 0.14);
+    --el-border-color-light: rgba(255, 255, 255, 0.1);
+    --el-border-color-lighter: rgba(255, 255, 255, 0.08);
+    --el-border-color-extra-light: rgba(255, 255, 255, 0.06);
+    --el-border-color-dark: rgba(255, 255, 255, 0.2);
+    --el-border-color-darker: rgba(255, 255, 255, 0.26);
+    --el-fill-color: rgba(255, 255, 255, 0.08);
+    --el-fill-color-light: rgba(255, 255, 255, 0.06);
+    --el-fill-color-lighter: rgba(255, 255, 255, 0.04);
+    --el-fill-color-blank: rgba(13, 18, 28, 0.5);
+    --el-fill-color-dark: rgba(255, 255, 255, 0.12);
+    --el-mask-color: rgba(0, 0, 0, 0.5);
+}
+
+/* 全幅壁纸：外层容器完全透明、不再叠两层深色（两层 0.55 叠加会把壁纸压成黑洞），
+   只留内容区一层很淡的深色 + 轻微毛玻璃，壁纸整幅透出来，和登录页一个感觉。 */
 html[data-wallpaper="1"] .layout.has-wallpaper .main-container {
-    background: rgba(255, 255, 255, 0.8);
-    backdrop-filter: blur(14px) saturate(1.2);
-    -webkit-backdrop-filter: blur(14px) saturate(1.2);
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
 }
 
 html[data-wallpaper="1"] .layout.has-wallpaper .el-header {
-    background: rgba(255, 255, 255, 0.72);
-    backdrop-filter: blur(14px) saturate(1.2);
-    -webkit-backdrop-filter: blur(14px) saturate(1.2);
+    /* 顶栏承托加厚：0.45 → 0.62，亮壁纸不再从顶栏透出来糊字。 */
+    background: rgba(13, 18, 28, 0.62);
+    backdrop-filter: blur(12px) saturate(1.2);
+    -webkit-backdrop-filter: blur(12px) saturate(1.2);
+}
+
+/* 内容区（收件箱/已发送/草稿/设置等路由视图）：原来是纯白 --el-bg-color，
+   会整块盖住壁纸，改很淡的深色半透明，壁纸整幅透出、字仍可读。
+   群友反馈深色壁纸上字看不清：桌面端 0.35 + blur 6 太透，亮斑直接穿字；
+   加厚到 0.62 + blur 12，壁纸仍 faint 可见，浅色文字先站稳。 */
+html[data-wallpaper="1"] .layout.has-wallpaper .main-view {
+    background: rgba(13, 18, 28, 0.62);
+    backdrop-filter: blur(12px) saturate(1.1);
+    -webkit-backdrop-filter: blur(12px) saturate(1.1);
 }
 
 html.dark[data-wallpaper="1"] .layout.has-wallpaper .main-container {
-    background: rgba(10, 10, 14, 0.66);
+    background: transparent;
+    backdrop-filter: none;
+    -webkit-backdrop-filter: none;
+}
+
+html.dark[data-wallpaper="1"] .layout.has-wallpaper .main-view {
+    background: rgba(10, 10, 14, 0.62);
+    backdrop-filter: blur(12px) saturate(1.1);
+    -webkit-backdrop-filter: blur(12px) saturate(1.1);
 }
 
 html.dark[data-wallpaper="1"] .layout.has-wallpaper .el-header {
-    background: rgba(10, 10, 14, 0.6);
+    background: rgba(10, 10, 14, 0.62);
+}
+
+/* 手机端壁纸优化（用户截图反馈：亮色人像壁纸透出来，次要文字看不清；
+   写信窗口半透明，收件箱在后面重影）。
+   手机竖屏上 16:9 壁纸只剩中间一条，亮部最容易糊字：遮罩加深、内容区加厚、
+   次要文字提亮；写信窗口改近不透明 + 背后加暗幕，收件箱不再透出来。 */
+@media (max-width: 767px) {
+    html[data-wallpaper="1"] body::before {
+        background-image: linear-gradient(rgba(0, 0, 0, 0.45), rgba(0, 0, 0, 0.45)), var(--wallpaper-url);
+    }
+
+    html.dark[data-wallpaper="1"] body::before {
+        background-image: linear-gradient(rgba(0, 0, 0, 0.55), rgba(0, 0, 0, 0.55)), var(--wallpaper-url);
+    }
+
+    html[data-wallpaper="1"] .layout.has-wallpaper .main-view {
+        background: rgba(13, 18, 28, 0.72);
+        backdrop-filter: blur(12px) saturate(1.1);
+        -webkit-backdrop-filter: blur(12px) saturate(1.1);
+    }
+
+    html.dark[data-wallpaper="1"] .layout.has-wallpaper .main-view {
+        background: rgba(10, 10, 14, 0.72);
+    }
+
+    html[data-wallpaper="1"] .layout.has-wallpaper .el-header {
+        background: rgba(13, 18, 28, 0.68);
+        backdrop-filter: blur(12px) saturate(1.2);
+        -webkit-backdrop-filter: blur(12px) saturate(1.2);
+    }
+
+    html.dark[data-wallpaper="1"] .layout.has-wallpaper .el-header {
+        background: rgba(10, 10, 14, 0.68);
+    }
+
+    /* 亮壁纸上次要文字提亮一级，预览行不再糊在人像亮部里。 */
+    html[data-wallpaper="1"] {
+        --el-text-color-secondary: #dbe1ea;
+        --el-text-color-placeholder: #b9c1cd;
+    }
+
+    /* 写信窗口：壁纸模式下 --el-bg-color 只有 0.55 不透明，收件箱会透出来重影。
+       改近不透明，容器本身再加暗幕盖住背后列表。 */
+    html[data-wallpaper="1"] .send {
+        background: rgba(0, 0, 0, 0.5);
+    }
+
+    html[data-wallpaper="1"] .send .write-box {
+        background: rgba(20, 26, 38, 0.97);
+    }
+}
+
+/* 全站按键按压感：所有按钮点下去像真按键一样沉一下再弹回（禁用态除外）。 */
+.el-button:not(.is-disabled),
+button:not(:disabled) {
+    transition: transform 0.08s ease, box-shadow 0.08s ease, filter 0.08s ease;
+}
+.el-button:not(.is-disabled):active,
+button:not(:disabled):active {
+    transform: translateY(1px) scale(0.97);
+    filter: brightness(0.92);
 }

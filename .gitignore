@@ -29,3 +29,7 @@ git-tools.js
 # 终极版部署配置（真实值，绝不提交）
 .deploy.env
 mail-worker/wrangler.deploy.toml
+
+# 老站部署配置（含老站 jwt_secret 明文，绝不提交）
+mail-worker/wrangler.old.toml
+gen_old_deploy_config.py

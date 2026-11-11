@@ -1,5 +1,6 @@
 <template>
-  <emailScroll ref="scroll"
+  <div class="inbox-page">
+    <emailScroll ref="scroll"
                :cancel-success="cancelStar"
                :star-success="addStar"
                :getEmailList="getEmailList"
@@ -11,8 +12,10 @@
                :highlight-text="emailStore.searchParams.text"
                actionLeft="4px"
                @jump="jumpContent"
-  >
-  </emailScroll>
+               style="flex: 1; min-height: 0; height: auto;"
+    >
+    </emailScroll>
+  </div>
 </template>
 
 <script setup>
@@ -22,10 +25,11 @@ import {useSettingStore} from "@/store/setting.js";
 import emailScroll from "@/components/email-scroll/index.vue"
 import {emailList, emailDelete, emailLatest, emailRead} from "@/request/email.js";
 import {starAdd, starCancel} from "@/request/star.js";
-import {defineOptions, onMounted, ref, watch} from "vue";
+import {defineOptions, onMounted, onUnmounted, ref, watch} from "vue";
 import {sleep} from "@/utils/time-utils.js";
 import router from "@/router/index.js";
 import { useRoute } from 'vue-router'
+import { notifyNewMail } from "@/utils/mail-notify.js";
 
 defineOptions({
   name: 'email'
@@ -36,11 +40,20 @@ const emailStore = useEmailStore();
 const accountStore = useAccountStore();
 const settingStore = useSettingStore();
 const scroll = ref({})
+
+// 速度优化：标签页不可见时暂停轮询（省服务器请求）；切回可见时立即拉一次，不用等满轮询间隔。
+let pollNow = false;
+function onVisibilityChange() {
+  if (!document.hidden) pollNow = true;
+}
 onMounted(() => {
   emailStore.emailScroll = scroll;
+  document.addEventListener('visibilitychange', onVisibilityChange);
   latest()
 })
-
+onUnmounted(() => {
+  document.removeEventListener('visibilitychange', onVisibilityChange);
+})
 
 watch(() => accountStore.currentAccountId, () => {
   scroll.value.refreshList();
@@ -69,7 +82,14 @@ async function latest() {
   while (true) {
 
     let autoRefresh = settingStore.settings.autoRefresh;
-    await sleep(autoRefresh > 1 ? autoRefresh * 1000 : 3000);
+    // 切回可见时跳过等待立即拉一次；标签页不可见时不发请求（省服务器）。
+    if (!pollNow) {
+      await sleep(autoRefresh > 1 ? autoRefresh * 1000 : 3000);
+    }
+    pollNow = false;
+    if (document.hidden) {
+      continue;
+    }
 
     if (route.name !== 'email') {
       continue;
@@ -98,6 +118,8 @@ async function latest() {
           if (list.length > 0) {
             emailStore.applyFullList(list)
 
+            // 本轮新到的邮件（去重后）：收集起来，轮询结束统一弹一次大框提示（多封合并一条）。
+            const newArrivals = [];
             for (let email of list) {
 
               email.reqAccountId = accountId;
@@ -107,10 +129,16 @@ async function latest() {
 
                 existIds.add(email.emailId)
                 scroll.value.addItem(email)
+                newArrivals.push(email)
 
                 await sleep(50)
               }
 
+            }
+
+            // 新邮件大框提示：右下角微软风格，3 秒自动关闭，点一下打开该封。
+            if (newArrivals.length > 0) {
+              notifyNewMail(newArrivals, (email) => jumpContent(email));
             }
 
           }
@@ -151,4 +179,11 @@ function getEmailList(emailId, size) {
 .icon {
   cursor: pointer;
 }
+
+.inbox-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
 </style>

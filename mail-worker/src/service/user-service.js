@@ -11,6 +11,7 @@ import emailService from './email-service';
 import dayjs from 'dayjs';
 import permService from './perm-service';
 import roleService from './role-service';
+import userContext from '../security/user-context';
 import emailUtils from '../utils/email-utils';
 import saltHashUtils from '../utils/crypto-utils';
 import constant from '../const/constant';
@@ -21,10 +22,13 @@ import loginLog from "../entity/login-log";
 import userTotp from "../entity/user-totp";
 import userPasskey from "../entity/user-passkey";
 import userSecurity from "../entity/user-security";
+import emailAlias from "../entity/email-alias";
+import deadManSwitch from "../entity/dead-man-switch";
 import oauthService from "./oauth-service";
 import settingService from './setting-service';
 import starService from './star-service';
 import auditLogService from './audit-log-service';
+import adminAuditService from './admin-audit-service';
 import r2Service from './r2-service';
 
 // CSV 字段转义：含逗号/双引号/换行时加双引号包裹，内部双引号翻倍。
@@ -46,8 +50,25 @@ const userService = {
 			throw new BizError(t('authExpired'), 401);
 		}
 
-		const [account, roleRow, permKeys] = await Promise.all([
-			accountService.selectByEmailIncludeDel(c, userRow.email),
+		const account = await accountService.selectByEmailIncludeDel(c, userRow.email);
+
+		// 诱饵会话（v3_16DB）：只给“普通用户”身份——发信量归零、无任何权限、
+		// 角色用默认角色（不透露真实角色/管理员身份/真实发信量）。
+		if (userContext.isDecoy(c)) {
+			const defaultRole = await roleService.selectDefaultRole(c);
+			return {
+				userId: userRow.userId,
+				sendCount: 0,
+				email: userRow.email,
+				account,
+				name: account.name,
+				permKeys: [],
+				role: defaultRole,
+				type: defaultRole?.roleId ?? userRow.type
+			};
+		}
+
+		const [roleRow, permKeys] = await Promise.all([
 			roleService.selectById(c, userRow.type),
 			userRow.email === c.env.admin ? Promise.resolve(['*']) : permService.userPermKeys(c, userId)
 		]);
@@ -155,6 +176,11 @@ const userService = {
 				await orm(c).delete(userTotp).where(eq(userTotp.userId, userId)).run();
 				await orm(c).delete(userPasskey).where(eq(userPasskey.userId, userId)).run();
 				await orm(c).delete(userSecurity).where(eq(userSecurity.userId, userId)).run();
+				// 斯诺登第二批（v3_15DB）：死亡开关行随账号一起删（否则孤儿行残留）；
+				// 同时补上上一批的已知缺口：一次性别名行也随账号删（否则别名地址仍被
+				// 唯一索引占用，删号后无法再注册该别名）。
+				await orm(c).delete(deadManSwitch).where(eq(deadManSwitch.userId, userId)).run();
+				await orm(c).delete(emailAlias).where(eq(emailAlias.userId, userId)).run();
 				await c.env.kv.delete(KvConst.SESSION_META + userId);
 				// 个人文件（自定义壁纸）：最佳努力清理，失败不阻断删号。
 				await this.removeUserFiles(c, userId, wallpapers[userId]);
@@ -332,6 +358,10 @@ const userService = {
 
 		for (const user of list) {
 
+			// 绑定码是 10 分钟有效的活凭证，不进管理列表返回（只留 tgChatId 供展示绑定状态）。
+			delete user.tgBindCode;
+			delete user.tgBindExpires;
+
 			const userId = user.userId;
 
 			user.receiveEmailCount = receiveMap[userId] || 0;
@@ -442,6 +472,10 @@ const userService = {
 		const { password, userId } = params;
 		await this.resetPassword(c, { password }, userId);
 		await c.env.kv.delete(KvConst.AUTH_INFO + userId);
+		await adminAuditService.recordAdminAction(c, {
+			actorUserId: userContext.getUserId(c), action: 'user:set-password',
+			targetId: String(userId), detail: {},
+		});
 	},
 
 	async setStatus(c, params) {
@@ -481,6 +515,10 @@ const userService = {
 			.where(eq(user.userId, userId))
 			.run();
 
+		await adminAuditService.recordAdminAction(c, {
+			actorUserId: userContext.getUserId(c), action: 'user:set-type',
+			targetId: String(userId), detail: { roleId: type },
+		});
 	},
 
 	async incrUserSendCount(c, quantity, userId) {
@@ -554,6 +592,22 @@ const userService = {
 
 	async resetSendCount(c, params) {
 		await orm(c).update(user).set({ sendCount: 0 }).where(eq(user.userId, params.userId)).run();
+	},
+
+	// 管理员给指定用户解绑 Telegram（清掉 tg_chat_id 与未用的绑定码）。
+	async unbindTelegram(c, params) {
+		const { userId } = params;
+		if (!userId) {
+			throw new BizError('缺少用户', 400);
+		}
+		await orm(c).update(user).set({ tgChatId: '', tgBindCode: '', tgBindExpires: '' })
+			.where(eq(user.userId, userId)).run();
+		await auditLogService.record(c, {
+			action: 'user:unbind-telegram',
+			targetType: 'user',
+			targetId: userId,
+			detail: {}
+		});
 	},
 
 	async restore(c, params) {

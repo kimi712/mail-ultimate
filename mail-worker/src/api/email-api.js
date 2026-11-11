@@ -19,6 +19,18 @@ app.delete('/email/delete', async (c) => {
 	return c.json(result.ok());
 });
 
+// 回收站：恢复到收件箱（只动自己的已删邮件）。
+app.put('/email/restore', async (c) => {
+	await emailService.restore(c, await c.req.json().catch(() => ({})), userContext.getUserId(c));
+	return c.json(result.ok());
+});
+
+// 回收站：彻底删除（只删已在回收站里且属于自己的信）。
+app.delete('/email/physicsDelete', async (c) => {
+	await emailService.deletePhysics(c, c.req.query(), userContext.getUserId(c));
+	return c.json(result.ok());
+});
+
 app.get('/email/attList', async (c) => {
 	const attList = await attService.list(c, c.req.query(), userContext.getUserId(c));
 	return c.json(result.ok(attList));

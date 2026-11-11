@@ -10,6 +10,8 @@ import user from '../entity/user';
 import verifyUtils from '../utils/verify-utils';
 import { t } from '../i18n/i18n.js';
 import emailUtils from '../utils/email-utils';
+import adminAuditService from './admin-audit-service';
+import userContext from '../security/user-context';
 
 const roleService = {
 
@@ -90,6 +92,10 @@ const roleService = {
 			await orm(c).insert(rolePerm).values(rolePermList).run();
 		}
 
+		await adminAuditService.recordAdminAction(c, {
+			actorUserId: userContext.getUserId(c), action: 'role:perm-update',
+			targetId: String(roleId), detail: { permIds },
+		});
 	},
 
 	async delete(c, params) {

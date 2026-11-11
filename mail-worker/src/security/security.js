@@ -10,6 +10,8 @@ import app from '../hono/hono';
 import reqUtils from '../utils/req-utils';
 import ipBlocklistService from '../service/ip-blocklist-service';
 import { ipBlocklistConst } from '../const/entity-const';
+import sessionService from '../service/session-service';
+import { getAuthInfoWithRetry } from '../utils/auth-info-utils';
 
 const exclude = [
 	'/login',
@@ -21,12 +23,18 @@ const exclude = [
 	'/public/genToken',
 	'/telegram',
 	'/test',
-	'/oauth'
+	'/oauth',
+	// Phase 8 F：公开的账号恢复接口（/recovery/*）不走鉴权
+	'/recovery',
+	// $1000 安全悬赏挑战：公开状态页（/challenge/*）不走鉴权
+	'/challenge'
 ];
 
 const requirePerms = [
 	'/email/send',
 	'/email/delete',
+	'/email/restore',
+	'/email/physicsDelete',
 	'/account/list',
 	'/account/delete',
 	'/account/add',
@@ -48,9 +56,11 @@ const requirePerms = [
 	'/setting/set',
 	'/setting/query',
 	'/setting/setBlacklist',
+	'/setting/tgWebhook',
 	'/user/delete',
 	'/user/setPwd',
 	'/user/setStatus',
+	'/user/unbindTelegram',
 	'/user/setType',
 	'/user/list',
 	'/user/restore',
@@ -76,7 +86,7 @@ const requirePerms = [
 ];
 
 const premKey = {
-	'email:delete': ['/email/delete'],
+	'email:delete': ['/email/delete', '/email/restore', '/email/physicsDelete'],
 	'email:send': ['/email/send'],
 	'account:add': ['/account/add'],
 	'account:query': ['/account/list'],
@@ -91,13 +101,13 @@ const premKey = {
 	'user:add': ['/user/add'],
 	'user:reset-send': ['/user/resetSendCount'],
 	'user:set-pwd': ['/user/setPwd'],
-	'user:set-status': ['/user/setStatus', '/user/restore'],
+	'user:set-status': ['/user/setStatus', '/user/restore', '/user/unbindTelegram'],
 	'user:set-type': ['/user/setType'],
 	'user:delete': ['/user/delete','/user/deleteAccount'],
 	'all-email:query': ['/allEmail/list','/allEmail/latest'],
 	'all-email:delete': ['/allEmail/delete','/allEmail/batchDelete'],
 	'setting:query': ['/setting/query'],
-	'setting:set': ['/setting/set', '/setting/setBackground','/setting/deleteBackground','/setting/setBlacklist'],
+	'setting:set': ['/setting/set', '/setting/setBackground','/setting/deleteBackground','/setting/setBlacklist', '/setting/tgWebhook'],
 	'analysis:query': ['/analysis/echarts','/quota/resend'],
 	'alert:query': ['/alertLog/list','/alertLog/record'],
 	'reg-key:add': ['/regKey/add'],
@@ -170,7 +180,17 @@ app.use('*', async (c, next) => {
 	}
 
 	const { userId, token } = result;
-	const authInfo = await c.env.kv.get(KvConst.AUTH_INFO + userId, { type: 'json' });
+
+	// 斯诺登第三批（v3_16DB）：胁迫密码签发的诱饵 token（payload.decoy=1）。
+	// 诱饵会话下所有接口只读诱饵/空数据（见 user-context.isDecoy 各处分支），
+	// 且一律禁入需要权限的管理路由——即使该账号本身是管理员。
+	const decoyMode = result.decoy === 1;
+	c.set('decoyMode', decoyMode);
+
+	// KV 最终一致性：登录刚写入的 token，紧接着读可能读到旧值（另一边缘
+	// 节点还没同步），直接判 401 会误杀刚登录的会话。读不到或 token 不在
+	// 列表时重试 3 次（间隔 200ms）再判 401。
+	const authInfo = await getAuthInfoWithRetry(c, userId, token, { attempts: 3, delayMs: 200 });
 
 	if (!authInfo) {
 		throw new BizError(t('authExpired'), 401);
@@ -185,6 +205,11 @@ app.use('*', async (c, next) => {
 	});
 
 	if (permIndex > -1) {
+
+		// 诱饵会话禁入一切管理路由（不透露“诱饵”身份，只报无权限）。
+		if (decoyMode) {
+			throw new BizError(t('unauthorized'), 403);
+		}
 
 		const permKeys = await permService.userPermKeys(c, authInfo.user.userId);
 
@@ -211,6 +236,14 @@ app.use('*', async (c, next) => {
 
 	c.set('user',authInfo.user)
 
+	// Phase 8 B：每次鉴权成功后刷新会话最后活跃时间（60 秒节流，见
+	// session-service.touchSession；写 KV 失败不阻断请求）。
+	try {
+		await sessionService.touchSession(c, authInfo.user.userId, token);
+	} catch (e) {
+		console.error('刷新会话最后活跃时间失败:', e.message);
+	}
+
 	return await next();
 });
 
@@ -228,12 +261,14 @@ function permKeyToPaths(permKeys) {
 }
 
 // 管理员逃生口：有效 JWT + KV 会话用户邮箱等于 c.env.admin。任一步失败返回 false。
+// 斯诺登第三批（v3_16DB）：诱饵会话（payload.decoy=1）永远不算管理员。
 async function isAdminRequest(c) {
 	try {
 		const jwt = c.req.header(constant.TOKEN_HEADER);
 		if (!jwt) return false;
 		const payload = await jwtUtils.verifyToken(c, jwt);
 		if (!payload || !payload.userId) return false;
+		if (payload.decoy === 1) return false;
 		const authInfo = await c.env.kv.get(KvConst.AUTH_INFO + payload.userId, { type: 'json' });
 		return !!authInfo && !!authInfo.user && authInfo.user.email === c.env.admin;
 	} catch (e) {

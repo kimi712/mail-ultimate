@@ -8,6 +8,7 @@ import { emailListColumns, emailBriefColumns } from '../lib/email-list-columns';
 import { isDel } from '../const/entity-const';
 import attService from "./att-service";
 import { t } from '../i18n/i18n'
+import userContext from '../security/user-context';
 const starService = {
 
 	async add(c, params, userId) {
@@ -33,6 +34,10 @@ const starService = {
 	},
 
 	async cancel(c, params, userId) {
+		// 诱饵会话（v3_16DB）：假装取消成功，实际不动真实星标。
+		if (userContext.isDecoy(c)) {
+			return;
+		}
 		const { emailId } = params;
 		await orm(c).delete(star).where(
 			and(
@@ -42,6 +47,10 @@ const starService = {
 	},
 
 	async list(c, params, userId) {
+		// 诱饵会话（v3_16DB）：星标列表为空（不透露真实星标邮件）。
+		if (userContext.isDecoy(c)) {
+			return { list: [] };
+		}
 		let { emailId, size, full } = params;
 		emailId = Number(emailId) || 0;
 		size = Number(size);
