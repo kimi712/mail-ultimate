@@ -263,9 +263,25 @@
             <el-tag :type="security.e2eeEnabled ? 'success' : 'info'">{{ security.e2eeEnabled ? $t('securityOn') : $t('securityOff') }}</el-tag>
             <el-tag :type="e2eeUnlocked ? 'success' : 'info'">{{ e2eeUnlocked ? $t('e2eeUnlocked') : $t('e2eeLocked') }}</el-tag>
           </div>
+          <!-- 2026-11-12 uwu 第 2 步：暴露（加密密码曾与登录密码相同，服务端曾可
+            推出邮件密钥）→ 改密码，改密时自动重包；未迁移（加密密码独立）→
+            输旧加密密码 + 登录密码迁移到新密钥。 -->
+          <el-alert v-if="security.e2eeEnabled && security.e2eeExposed === 1" :closable="false" type="warning" show-icon class="e2ee-warn">
+            <template #title><div>{{ $t('e2eeExposedWarn') }}</div></template>
+          </el-alert>
+          <el-alert v-if="security.e2eeEnabled && security.e2eeExposed === 2" :closable="false" type="warning" show-icon class="e2ee-warn">
+            <template #title><div>{{ $t('e2eeNotMigratedWarn') }}</div></template>
+          </el-alert>
+          <div v-if="security.e2eeEnabled && security.e2eeExposed === 2" style="display: flex; flex-direction: column; gap: 8px; margin: 8px 0;">
+            <el-input v-model="migrateOldPassword" type="password" :placeholder="$t('e2eePasswordPlaceholder')" autocomplete="off" class="code-input" />
+            <el-input v-model="migrateLoginPassword" type="password" :placeholder="$t('securityUnlockPassword')" autocomplete="off" class="code-input" />
+            <div>
+              <el-button type="primary" :loading="migrating" @click="migrateE2ee">{{ $t('e2eeMigrate') }}</el-button>
+            </div>
+          </div>
           <div class="kv-row">
-            <span class="kv-label">{{ $t('e2eePassword') }}</span>
-            <el-input v-model="e2eePassword" type="password" :placeholder="$t('e2eePasswordPlaceholder')" autocomplete="off" class="code-input" @keyup.enter="e2eeEnabled ? unlockE2ee() : enableE2ee()" />
+            <span class="kv-label">{{ $t('password') }}</span>
+            <el-input v-model="e2eePassword" type="password" :placeholder="security.e2eeEnabled && security.e2eeExposed === 2 ? $t('e2eePasswordPlaceholder') : $t('securityUnlockPassword')" autocomplete="off" class="code-input" @keyup.enter="security.e2eeEnabled ? unlockE2ee() : enableE2ee()" />
             <el-button v-if="!security.e2eeEnabled" type="primary" :loading="e2eeLoading" @click="enableE2ee">{{ $t('e2eeEnableUnlock') }}</el-button>
             <el-button v-else-if="!e2eeUnlocked" type="primary" :loading="e2eeLoading" @click="unlockE2ee">{{ $t('e2eeUnlock') }}</el-button>
             <el-button v-else @click="lockE2ee">{{ $t('e2eeLock') }}</el-button>
@@ -404,25 +420,6 @@
           </div>
         </div>
 
-        <!-- 零知识身份（斯诺登第三批，v3_16DB）：挑战-应答，服务端只存验证子 -->
-        <div class="section" id="sec-zk">
-          <div class="section-title">{{ $t('zkTitle') }}</div>
-          <div class="desc">{{ $t('zkDesc') }}</div>
-          <div class="desc">{{ $t('zkDesc2') }}</div>
-          <div class="row">
-            <el-tag :type="zkEnabled ? 'success' : 'info'">{{ zkEnabled ? $t('securityOn') : $t('securityOff') }}</el-tag>
-          </div>
-          <div class="kv-row">
-            <span class="kv-label">{{ $t('totpPassword') }}</span>
-            <el-input v-model="zkMainPassword" type="password" :placeholder="$t('duressMainPasswordPlaceholder')" autocomplete="off" class="code-input" />
-          </div>
-          <div class="row">
-            <el-button type="primary" :loading="zkLoading" @click="setupZkFn">{{ zkEnabled ? $t('zkReSetup') : $t('zkSetup') }}</el-button>
-            <el-button v-if="zkEnabled" :loading="zkLoading" @click="disableZkFn">{{ $t('zkDisable') }}</el-button>
-          </div>
-          <div class="desc">{{ $t('zkHint') }}</div>
-        </div>
-
         <!-- 闲置自动锁定 -->
         <div class="section" id="sec-autolock">
           <div class="section-title">{{ $t('securityAutoLock') }}</div>
@@ -503,15 +500,18 @@ import {
   getMlkemPrivate, setMlkemKeys, getDeadman, setDeadman, disableDeadman
 } from '@/request/security.js'
 import {
-  generateSalt, unlockWithPassword, hasMemoryKey, getMemoryKey, clearMemoryKey,
+  generateSalt, unlockWithPassword, hasMemoryKey, getMemoryKey, setMemoryKey, clearMemoryKey,
   exportKekRaw, importKekRaw
 } from '@/utils/e2ee.js'
 import {splitSecret, recoverSecret, isValidShare} from '@/utils/shamir.js'
-import {buildZkSetupField} from '@/utils/zklogin.js'
 import {
   getDuressStatus, setDuressPassword, changeDuressPassword, disableDuressPassword,
-  getZkStatus, setupZk, disableZk
 } from '@/request/snowden3.js'
+import { deriveAuthKeys, deriveMainLoginKey, getLoginSalt, fetchLoginSalt, setLoginSalt } from '@/utils/authkeys.js'
+import { deriveKey } from '@/utils/e2ee.js'
+import { rewrapAll } from '@/utils/e2ee-migrate.js'
+import { reportE2eeExposure } from '@/request/security.js'
+import { useUserStore } from '@/store/user.js'
 import {
   generateMlKemKeypair, encryptMlkemPrivateKey, decryptMlkemPrivateKey,
   selfTestMlKem, clearMemoryMlkemPrivateKey, setMemoryMlkemPrivateKey
@@ -548,7 +548,6 @@ const sectionNavItems = computed(() => [
   { id: 'sec-deadman', label: t('deadmanTitle') },
   { id: 'sec-duress', label: t('duressTitle') },
   { id: 'sec-shamir', label: t('shamirTitle') },
-  { id: 'sec-zk', label: t('zkTitle') },
   { id: 'sec-autolock', label: t('securityAutoLock') },
   { id: 'sec-mydata', label: t('securityMyData') },
   { id: 'sec-canary', label: t('canarySection') },
@@ -560,7 +559,11 @@ const security = reactive({
   retentionDays: 0,
   e2eeSalt: '',
   autoLockMinutes: 0,
-  mlkemEnabled: 0
+  mlkemEnabled: 0,
+  // 2026-11-12 uwu 第 2 步：E2EE 暴露状态（0=正常/已统一，1=已暴露，
+  // 2=老模型未迁移）与有无登录密码（OAuth 用户无口令，开启 E2EE 前须先设密码）。
+  e2eeExposed: 0,
+  hasPassword: false
 })
 const loginAlertOn = ref(true)
 const saving = ref(false)
@@ -587,9 +590,13 @@ const shamirRecoverVisible = ref(false)
 const shamirInput1 = ref('')
 const shamirInput2 = ref('')
 const shamirInput3 = ref('')
-const zkEnabled = ref(false)
-const zkLoading = ref(false)
-const zkMainPassword = ref('')
+
+// 验密操作共用：由当前输入的主密码派生登录密钥（内存盐优先，缺失时按邮箱取盐）。
+const userStore = useUserStore()
+async function mainLoginKeyFor(password) {
+  const email = userStore.user?.email || userStore.user?.account?.email || ''
+  return deriveMainLoginKey(password, email)
+}
 
 // 契约 §1.3 的 GET /my/security 未列出 totpEnabled 字段；若 B 路返回则采用，
 // 否则按未开启计分（见汇报“待对齐项”）。本页内成功启用/关闭后立即同步本地状态。
@@ -640,6 +647,10 @@ const totpQrCanvas = ref(null)
 const e2eePassword = ref('')
 const e2eeUnlocked = ref(false)
 const e2eeLoading = ref(false)
+// 2026-11-12 uwu 第 2 步：老模型未迁移时的迁移行输入（旧加密密码 + 登录密码）。
+const migrateOldPassword = ref('')
+const migrateLoginPassword = ref('')
+const migrating = ref(false)
 const exportLoading = ref(false)
 const deleteLoading = ref(false)
 const hardDeleteDialogVisible = ref(false)
@@ -734,6 +745,8 @@ function loadSecurity() {
     security.autoLockMinutes = [0, 5, 15, 30].includes(data.autoLockMinutes) ? data.autoLockMinutes : 0
     security.e2eeSalt = data.e2eeSalt || ''
     security.mlkemEnabled = data.mlkemEnabled ? 1 : 0
+    security.e2eeExposed = Number(data.e2eeExposed || 0)
+    security.hasPassword = !!data.hasPassword
     if (data.totpEnabled === true) {
       totpEnabled.value = true
     }
@@ -847,7 +860,6 @@ onMounted(() => {
     loadAuditLog(),
     loadCanary(),
     loadDuress(),
-    loadZk(),
   ]
   scrollToQueryAnchor({ route, router, routeName: 'security', jobs, getWrap: () => scrollContainer.value })
 })
@@ -856,12 +868,6 @@ onMounted(() => {
 function loadDuress() {
   return getDuressStatus().then((data) => {
     duressEnabled.value = !!data?.enabled
-  }).catch(() => {})
-}
-
-function loadZk() {
-  return getZkStatus().then((data) => {
-    zkEnabled.value = !!data?.enabled
   }).catch(() => {})
 }
 
@@ -935,13 +941,16 @@ function confirmTotpEnable() {
   })
 }
 
-function confirmTotpDisable() {
+async function confirmTotpDisable() {
   if (!disablePassword.value || !/^\d{6}$/.test(disableCode.value)) {
     toast(t('totpNeedPassword'))
     return
   }
   totpLoading.value = true
-  totpDisable(disablePassword.value, disableCode.value).then(() => {
+  try {
+    // 2026-11-12 uwu 第 1 步：主密码不出浏览器，先派生登录密钥再发。
+    const loginKey = await mainLoginKeyFor(String(disablePassword.value || '').trim())
+    await totpDisable(loginKey, disableCode.value)
     totpEnabled.value = false
     showDisableTotp.value = false
     disablePassword.value = ''
@@ -950,10 +959,10 @@ function confirmTotpDisable() {
     loadScore()
     loadAuditLog()
     toast(t('totpDisableSuccess'), 'success')
-  }).catch((e) => {
+  } catch (e) {
     totpLoading.value = false
     toast(e?.message || t('reqFailErrorMsg'))
-  })
+  }
 }
 
 // ---- Passkey ----
@@ -1114,7 +1123,9 @@ async function confirmHardDelete() {
   }
   hardDeleteLoading.value = true
   try {
-    await hardDeleteMyAccount(hardDeletePassword.value, hardDeleteConfirmText.value)
+    // 2026-11-12 uwu 第 1 步：主密码不出浏览器，先派生登录密钥再发。
+    const loginKey = await mainLoginKeyFor(String(hardDeletePassword.value || '').trim())
+    await hardDeleteMyAccount(loginKey, hardDeleteConfirmText.value)
     localStorage.removeItem('token')
     hardDeleteDialogVisible.value = false
     hardDeletePassword.value = ''
@@ -1127,17 +1138,44 @@ async function confirmHardDelete() {
 }
 
 // ---- E2EE ----
+// 2026-11-12 uwu 第 1 步：统一口令模型——登录密码即邮件密钥之源，
+// 不再设第二个“加密密码”。
 async function enableE2ee() {
+  // 会话里已有邮件密钥（登录时探针已设）→ 直接开启，不再弹密码框。
+  if (hasMemoryKey()) {
+    e2eeLoading.value = true
+    try {
+      const salt = security.e2eeSalt || generateSalt()
+      await setSecurity({e2eeEnabled: 1, e2eeSalt: salt})
+      security.e2eeSalt = salt
+      security.e2eeEnabled = 1
+      e2eeUnlocked.value = true
+    } catch (e) {
+      console.error(e)
+      toast(e?.message || t('reqFailErrorMsg'))
+    } finally {
+      e2eeLoading.value = false
+    }
+    return
+  }
+  // OAuth 用户无登录密码：邮件密钥派不出可重建的密钥，须先到设置页设密码。
+  if (!security.hasPassword) {
+    toast(t('e2eeNeedLoginPassword'))
+    return
+  }
   if (!e2eePassword.value) {
     toast(t('e2eeNeedPassword'))
     return
   }
   e2eeLoading.value = true
   try {
+    // 由登录密码派生邮件密钥（盐优先用内存里的，缺失时按邮箱取）。
+    const email = userStore.user?.email || userStore.user?.account?.email || ''
+    const keys = await deriveAuthKeys(String(e2eePassword.value || '').trim(), await loginSaltFor(email))
     const salt = security.e2eeSalt || generateSalt()
     await setSecurity({e2eeEnabled: 1, e2eeSalt: salt})
     security.e2eeSalt = salt
-    await unlockWithPassword(e2eePassword.value, salt)
+    setMemoryKey(keys.mailKey)
     security.e2eeEnabled = 1
     e2eeUnlocked.value = true
     e2eePassword.value = ''
@@ -1149,6 +1187,17 @@ async function enableE2ee() {
   }
 }
 
+// 取登录盐（e2eeSalt 之外的用户盐）：内存优先，缺失时按邮箱取盐并存回内存。
+function loginSaltFor(email) {
+  let salt = getLoginSalt()
+  if (salt) return salt
+  if (!email) throw new Error('no-login-salt')
+  return fetchLoginSalt(email).then((info) => {
+    setLoginSalt(info.salt)
+    return info.salt
+  })
+}
+
 async function unlockE2ee() {
   if (!e2eePassword.value || !security.e2eeSalt) {
     toast(t('e2eeNeedPassword'))
@@ -1156,7 +1205,15 @@ async function unlockE2ee() {
   }
   e2eeLoading.value = true
   try {
-    await unlockWithPassword(e2eePassword.value, security.e2eeSalt)
+    if (security.e2eeExposed === 2) {
+      // 老模型未迁移：仍用旧加密密码派生旧 KEK（解锁，不迁移；迁移走 migrateE2ee）。
+      await unlockWithPassword(e2eePassword.value, security.e2eeSalt)
+    } else {
+      // 统一模型：由登录密码派生邮件密钥。
+      const email = userStore.user?.email || userStore.user?.account?.email || ''
+      const keys = await deriveAuthKeys(String(e2eePassword.value || '').trim(), await loginSaltFor(email))
+      setMemoryKey(keys.mailKey)
+    }
     e2eeUnlocked.value = true
     e2eePassword.value = ''
   } catch (e) {
@@ -1164,6 +1221,34 @@ async function unlockE2ee() {
     toast(t('e2eeUnlockFailed'))
   } finally {
     e2eeLoading.value = false
+  }
+}
+
+// 老模型未迁移 → 迁移到新密钥：旧加密密码派生旧 KEK 解出 CEK，
+// 登录密码派生新邮件密钥重包，分批提交；成功后解锁并清零暴露状态。
+async function migrateE2ee() {
+  if (!migrateOldPassword.value || !migrateLoginPassword.value) {
+    toast(t('e2eeNeedBothPasswords'))
+    return
+  }
+  migrating.value = true
+  try {
+    const email = userStore.user?.email || userStore.user?.account?.email || ''
+    const oldKek = await deriveKey(String(migrateOldPassword.value || '').trim(), security.e2eeSalt)
+    const keys = await deriveAuthKeys(String(migrateLoginPassword.value || '').trim(), await loginSaltFor(email))
+    const { total, updated } = await rewrapAll(oldKek, keys.mailKey)
+    setMemoryKey(keys.mailKey)
+    e2eeUnlocked.value = true
+    security.e2eeExposed = 0
+    await reportE2eeExposure(0).catch(() => {})
+    migrateOldPassword.value = ''
+    migrateLoginPassword.value = ''
+    toast(t('e2eeMigrated', { total, updated }), 'success')
+  } catch (e) {
+    console.error(e)
+    toast(t('e2eeMigrateFailed'))
+  } finally {
+    migrating.value = false
   }
 }
 
@@ -1302,10 +1387,19 @@ async function saveDuress() {
     toast(t('duressTooShort'))
     return
   }
+  // 2026-11-12 uwu 第 1 步：第二密码不得与主密码相同，改由浏览器在输入时比对
+  // （服务端再也见不到两个口令原文，无法代验）。
+  if (String(duressPassword.value).trim() === String(duressMainPassword.value).trim()) {
+    toast(t('duressSameAsMain'))
+    return
+  }
   duressLoading.value = true
   try {
+    // 主密码不出浏览器（只发登录密钥）；胁迫密码由服务端用存量胁迫盐派生
+    // （胁迫密码只开诱饵会话，不碰真实数据，服务端见它无害）。
+    const mainLoginKey = await mainLoginKeyFor(String(duressMainPassword.value || '').trim())
     const fn = duressEnabled.value ? changeDuressPassword : setDuressPassword
-    await fn(duressMainPassword.value, duressPassword.value)
+    await fn(mainLoginKey, String(duressPassword.value || '').trim())
     duressEnabled.value = true
     duressMainPassword.value = ''
     duressPassword.value = ''
@@ -1325,7 +1419,8 @@ async function disableDuressFn() {
   }
   duressLoading.value = true
   try {
-    await disableDuressPassword(duressMainPassword.value)
+    const mainLoginKey = await mainLoginKeyFor(String(duressMainPassword.value || '').trim())
+    await disableDuressPassword(mainLoginKey)
     duressEnabled.value = false
     duressMainPassword.value = ''
     duressPassword.value = ''
@@ -1388,47 +1483,6 @@ async function recoverShamir() {
   }
 }
 
-// ---- 零知识身份（斯诺登第三批，v3_16DB） ----
-// 开通：前端随机 salt + verifier = SHA-256(salt + 主密码)，只把 salt 与
-// verifier 发给后端；服务端只存验证子，不存可逆凭证。登录时走挑战-应答。
-async function setupZkFn() {
-  if (!zkMainPassword.value) {
-    toast(t('duressNeedMain'))
-    return
-  }
-  zkLoading.value = true
-  try {
-    const {salt, verifier} = await buildZkSetupField(zkMainPassword.value)
-    await setupZk(zkMainPassword.value, salt, verifier)
-    zkEnabled.value = true
-    zkMainPassword.value = ''
-    toast(t('zkSetupOk'), 'success')
-  } catch (e) {
-    console.error(e)
-    toast(e?.message || t('reqFailErrorMsg'))
-  } finally {
-    zkLoading.value = false
-  }
-}
-
-async function disableZkFn() {
-  if (!zkMainPassword.value) {
-    toast(t('duressNeedMain'))
-    return
-  }
-  zkLoading.value = true
-  try {
-    await disableZk(zkMainPassword.value)
-    zkEnabled.value = false
-    zkMainPassword.value = ''
-    toast(t('zkDisabled'), 'success')
-  } catch (e) {
-    console.error(e)
-    toast(e?.message || t('reqFailErrorMsg'))
-  } finally {
-    zkLoading.value = false
-  }
-}
 </script>
 <style scoped lang="scss">
 .security-page {

@@ -176,6 +176,8 @@ import { getPrivacyDashboard, listNewIpAlerts, acknowledgeNewIp } from '@/reques
 import { generateRecoveryCodes, setBackupEmail } from '@/request/recovery.js'
 import { setSecurity } from '@/request/security.js'
 import { formatDeviceBrowser } from '@/utils/device.js'
+import { deriveMainLoginKey } from '@/utils/authkeys.js'
+import { useUserStore } from '@/store/user.js'
 
 defineOptions({
   name: 'privacy'
@@ -261,7 +263,11 @@ async function onControlChange(key, value) {
 async function onGenerateCodes() {
   recoveryLoading.value = true
   try {
-    const res = await generateRecoveryCodes(recoveryPassword.value)
+    // 2026-11-12 uwu 第 1 步：主密码不出浏览器，先派生登录密钥再发。
+    const userStore = useUserStore()
+    const email = userStore.user?.email || userStore.user?.account?.email || ''
+    const loginKey = await deriveMainLoginKey(String(recoveryPassword.value || '').trim(), email)
+    const res = await generateRecoveryCodes(loginKey)
     // 拦截器已解包成 { codes: [...] }，不再取 .data（同上 ⑦）
     generatedCodes.value = res?.codes || []
   } finally {

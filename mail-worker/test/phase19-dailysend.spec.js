@@ -14,6 +14,7 @@
 import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
 import roleService from '../src/service/role-service';
+import { registerNew, loginNew } from './auth-helpers.js';
 
 const TEST_JWT_SECRET = 'phase1-local-test-only-not-a-real-secret';
 const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -35,16 +36,11 @@ function api(path, { method = 'GET', body, token, ip, ua } = {}) {
 }
 
 async function register(email, ip) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		ua: CHROME_UA,
-		body: { email, password: 'password123' }
-	});
+	return registerNew(api, email, { ip, ua: CHROME_UA });
 }
 
 async function login(email) {
-	const res = await api('/login', { method: 'POST', body: { email, password: 'password123' } });
+	const res = await loginNew(api, email, {});
 	expect(res.json.code).toBe(200);
 	return res.json.data.token;
 }

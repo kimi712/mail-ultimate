@@ -3,16 +3,15 @@ import loginService from '../service/login-service';
 import result from '../model/result';
 import userContext from '../security/user-context';
 import passkeyService from '../service/passkey-service';
-import zkService from '../service/zk-service';
 
-// 斯诺登第三批（v3_16DB）：零知识登录挑战。公开接口（/login 前缀免鉴权）。
-// GET /login/zk-challenge?email=… → { challengeId, nonce, salt, enabled }。
-// 无论账号是否开通 ZK 都返回挑战（不开通时用随机盐），不透露开通状态；
-// 挑战 5 分钟过期、一次有效。前端先算 verifier = SHA-256(salt + password)，
-// 再算 response = SHA-256(verifier + nonce) base64，随登录请求一起发 zk 字段。
-app.get('/login/zk-challenge', async (c) => {
-	const challenge = await zkService.issueChallenge(c, c.req.query('email') || '');
-	return c.json(result.ok(challenge));
+// 取登录盐（2026-11-12 uwu 第 1 步）：公开接口（/login 前缀免鉴权）。
+// GET /login/salt?email=… → { salt, version, decoySalt? }：version 1 = 旧
+// SHA-256 凭证待迁移（本次登录顺带迁移），version 2 = 新口径；decoySalt
+// 仅在胁迫密码已开通时返回。未知邮箱/已注销/已禁用一律返回随机盐 +
+// version 2，不透露账号是否存在（登录时再以通用错误拒绝）。
+app.get('/login/salt', async (c) => {
+	const data = await loginService.getLoginSalt(c, c.req.query('email') || '');
+	return c.json(result.ok(data));
 });
 
 // Phase 6：密码通过且用户开启 TOTP 时 login() 返回 {needTotp, totpToken}

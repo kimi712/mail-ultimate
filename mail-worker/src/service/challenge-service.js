@@ -6,6 +6,19 @@
 import BizError from '../error/biz-error';
 import ratelimit from '../kernel/ratelimit';
 import reqUtils from '../utils/req-utils';
+import settingService from './setting-service';
+
+// 暂停开关（2026-11-12 uwu 第 5 步）：setting.challenge_paused=1 时挑战暂停，
+// status() 返回 paused: true、submit() 400 拒绝、/challenge 页只显示横幅。
+// 读不到设置时默认不暂停（不把设置故障变成挑战不可用）。
+async function isPaused(c) {
+	try {
+		const setting = await settingService.query(c);
+		return Number(setting?.challengePaused || 0) === 1;
+	} catch (e) {
+		return false;
+	}
+}
 
 // 截止日固定（北京时间），任何代码路径不得改动。
 export const CHALLENGE_DEADLINE = '2026-11-18T23:59:00+08:00';
@@ -68,6 +81,7 @@ const challengeService = {
 		return {
 			deadline: CHALLENGE_DEADLINE,
 			prizeUsd: CHALLENGE_PRIZE_USD,
+			paused: await isPaused(c),
 			...proof,
 			attempts: stats
 		};
@@ -77,6 +91,9 @@ const challengeService = {
 	// 提交时间（created_at 由 D1 默认值写）。绝不存原文。
 	// 正式裁决提交渠道以悬赏帖为准，这里不是交答案的地方。
 	async submit(c, body) {
+		if (await isPaused(c)) {
+			throw new BizError('challenge paused', 400);
+		}
 		const phrase = typeof body?.phrase === 'string' ? body.phrase.trim() : '';
 		const method = typeof body?.method === 'string' ? body.method.trim() : '';
 		if (!phrase || !method) {

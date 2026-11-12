@@ -1,6 +1,7 @@
 <!-- Phase 7：闲置自动锁定。挂在登录后的 layout 里（登录页不在 layout 内，不受影响）。
   行为：读 GET /my/security 的 autoLockMinutes（0=从不）；无操作满 N 分钟后
-  全屏锁定，须输入登录密码调 POST /security/unlock 解锁。锁定本身不登出、
+  全屏锁定，须输入登录密码调 POST /security/unlock 解锁（2026-11-12 起只发
+  浏览器派生的登录密钥，密码原文不出浏览器）。锁定本身不登出、
   不轮换会话，只是界面态；锁定同时清掉内存中的 E2EE 密钥（解锁 E2EE 需重新输入加密密码）。
   安全中心改设置后会派发 window 事件 auto-lock-settings-changed 告知本组件刷新时长。 -->
 <template>
@@ -27,8 +28,11 @@ import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { getSecurity, unlock } from '@/request/security.js'
 import { clearMemoryKey } from '@/utils/e2ee.js'
+import { deriveMainLoginKey } from '@/utils/authkeys.js'
+import { useUserStore } from '@/store/user.js'
 
 const { t } = useI18n()
+const userStore = useUserStore()
 const locked = ref(false)
 const password = ref('')
 const unlocking = ref(false)
@@ -100,25 +104,29 @@ function loadMinutes() {
   })
 }
 
-function doUnlock() {
+async function doUnlock() {
   if (!password.value || unlocking.value) {
     return
   }
   unlocking.value = true
-  unlock(password.value).then(() => {
+  try {
+    // 2026-11-12 uwu 第 1 步：主密码不出浏览器，先派生登录密钥再发。
+    const email = userStore.user?.email || userStore.user?.account?.email || ''
+    const loginKey = await deriveMainLoginKey(String(password.value || '').trim(), email)
+    await unlock(loginKey)
     password.value = ''
     locked.value = false
     unlocking.value = false
     lastReset = Date.now()
     armTimer()
-  }).catch((e) => {
+  } catch (e) {
     unlocking.value = false
     ElMessage({
       message: e?.message || t('securityUnlockFailed'),
       type: 'error',
       plain: true
     })
-  })
+  }
 }
 
 const ACTIVITY_EVENTS = ['mousemove', 'keydown', 'click', 'wheel', 'touchstart']

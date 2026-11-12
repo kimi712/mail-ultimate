@@ -12,6 +12,7 @@ import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll, vi } from 'vitest';
 import telegramService from '../src/service/telegram-service';
 import loginService from '../src/service/login-service';
+import { registerNew, loginNew } from './auth-helpers.js';
 
 const IP_A = '203.0.113.41';
 
@@ -34,15 +35,11 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 }
 
 async function register(email, ip, extra = {}) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123', ...extra }
-	});
+	return registerNew(api, email, { ip, extra });
 }
 
 async function login(email, ip, password = 'password123') {
-	return api('/login', { method: 'POST', ip, body: { email, password } });
+	return loginNew(api, email, { ip, password });
 }
 
 const SETTING_COLUMN_MAP = {

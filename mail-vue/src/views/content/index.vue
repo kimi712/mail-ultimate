@@ -164,18 +164,18 @@
             <div class="att-box">
 
               <div class="att-item" v-for="att in email.attList" :key="att.attId">
-                <div class="att-icon" @click="showImage(att.key)">
+                <div class="att-icon" @click="showImage(att)">
                   <Icon v-bind="getIconByName(att.filename)" />
                 </div>
-                <div class="att-name" @click="showImage(att.key)">
+                <div class="att-name" @click="showImage(att)">
                   {{ att.filename }}
                 </div>
                 <div class="att-size">{{ formatBytes(att.size) }}</div>
                 <div class="opt-icon att-icon">
-                  <Icon v-if="isImage(att.filename)" icon="hugeicons:view" width="22" height="22" @click="showImage(att.key)"/>
+                  <Icon v-if="isImage(att.filename)" icon="hugeicons:view" width="22" height="22" @click="showImage(att)"/>
                   <!-- 斯诺登第三批（v3_16DB）：隐写术——从 PNG 附件里提取藏入的短文本（仅站内有效）。 -->
                   <Icon v-if="att.filename && att.filename.toLowerCase().endsWith('.png')" icon="hugeicons:search-01" width="22" height="22" @click="extractStego(att)" :title="$t('stegoExtract')" />
-                  <a :href="cvtR2Url(att.key)" download>
+                  <a href="javascript:void(0)" @click.prevent="downloadAtt(att)">
                     <Icon icon="system-uicons:push-down" width="22" height="22"/>
                   </a>
                 </div>
@@ -223,7 +223,7 @@ import {sanitizeEmailHtml} from "@/utils/email-html.js";
 import {getSecurity} from "@/request/security.js";
 import {aiSummarize, aiSummarizeStream, aiTranslate, aiTranslateStream, aiTriage, aiErrorI18nKey} from "@/request/ai.js";
 import {SUPPORTED_LOCALES} from "@/i18n/locale.js";
-import {hasMemoryKey, getMemoryKey, unlockWithPassword, decryptEmailParts, decryptEmailPartsV2, clearMemoryKey, isSealedSender, unsealSender, computeBlindToken, extractKeywords, getMemoryBlindKey} from "@/utils/e2ee.js";
+import {hasMemoryKey, getMemoryKey, unlockWithPassword, decryptEmailParts, decryptEmailPartsV2, clearMemoryKey, isSealedSender, unsealSender, computeBlindToken, extractKeywords, getMemoryBlindKey, decryptBytes, computeFakeBlindTokens} from "@/utils/e2ee.js";
 import {extractText} from "@/utils/stego.js";
 import {submitBlindIndex} from "@/request/snowden3.js";
 import {clearMemoryMlkemPrivateKey} from "@/utils/pqkem.js";
@@ -423,6 +423,9 @@ const e2eeDecrypting = ref(false)
 const e2eeSalt = ref('')
 const decryptedContent = ref('')
 const decryptedText = ref('')
+// 白帽反馈修复（2026-11-12）：当前邮件的附件解密密钥（v2 为 CEK，v1 为 KEK）。
+// 只在内存里随邮件切换清掉；加密附件（encoding='e2ee-v1'）下载/预览时用它解密。
+const mailAttKey = ref(null)
 const isE2eeMail = computed(() => email.value?.e2ee === 1)
 // 斯诺登第二批（v3_15DB）：密封发件人解密结果。未解锁时为 null，界面显示占位。
 const decryptedSender = ref(null)
@@ -537,6 +540,7 @@ async function tryDecryptE2ee() {
     if (Number(mail.e2eeVer) === 2) {
       // v2 信封：先解出一次性密钥 CEK，再用 CEK 解正文与密封发件人。
       const cekKey = await resolveMailCek(mail)
+      mailAttKey.value = cekKey // 该信附件（encoding='e2ee-v1'）也用这把 CEK 解。
       const parts = await decryptEmailPartsV2({text: mail.text, content: mail.content}, cekKey)
       if (email.value?.emailId !== mail.emailId) {
         return // 解密期间切走了邮件，丢弃结果
@@ -556,6 +560,8 @@ async function tryDecryptE2ee() {
       // 斯诺登第三批（v3_16DB）：可搜索加密——读信解密后，把用自己盲索引密钥
       // 算的关键词 token 补传给后端（存收信方名下），之后收信方才能搜到这封信。
       // 失败不弹错（只是搜不到）。
+      // 假 token 填充（2026-11-12 白帽反馈修复）：另附 16 个假 token，让服务
+      // 端无法从 token 分布反推哪些信共享词；搜索只查真实 token，无假阳性。
       try {
         const blindKey = getMemoryBlindKey()
         if (blindKey && mail.emailId) {
@@ -563,6 +569,9 @@ async function tryDecryptE2ee() {
           const tokens = []
           for (const kw of keywords) {
             tokens.push(await computeBlindToken(kw, blindKey))
+          }
+          for (const ft of await computeFakeBlindTokens(blindKey)) {
+            tokens.push(ft)
           }
           if (tokens.length) {
             submitBlindIndex(mail.emailId, tokens).catch(() => {})
@@ -573,6 +582,7 @@ async function tryDecryptE2ee() {
       }
     } else {
       const parts = await decryptEmailParts({text: mail.text, content: mail.content})
+      mailAttKey.value = getMemoryKey() // v1 信：附件（若已加密）用 KEK 解。
       if (email.value?.emailId !== mail.emailId) {
         return // 解密期间切走了邮件，丢弃结果
       }
@@ -585,6 +595,7 @@ async function tryDecryptE2ee() {
     console.error(e)
     clearMemoryKey()
     clearMemoryMlkemPrivateKey()
+    mailAttKey.value = null
     e2eeState.value = 'error'
   }
 }
@@ -649,6 +660,7 @@ watch(() => [email.value?.emailId, email.value?.e2ee, email.value?.content, emai
     decryptedContent.value = ''
     decryptedText.value = ''
     decryptedSender.value = null
+    mailAttKey.value = null
     e2eeMailId = 0
     return
   }
@@ -658,6 +670,7 @@ watch(() => [email.value?.emailId, email.value?.e2ee, email.value?.content, emai
     decryptedContent.value = ''
     decryptedText.value = ''
     decryptedSender.value = null
+    mailAttKey.value = null
   }
   if (e2eeState.value === 'error') {
     return
@@ -863,8 +876,73 @@ function formatImage(content) {
   return  content.replace(/{{domain}}/g, toOssDomain(domain) + '/');
 }
 
-function showImage(key) {
+// 白帽反馈修复（2026-11-12）：加密附件（encoding='e2ee-v1'）的读取。
+// R2 里存的是 e2ee:v1: 信封字节，取回后用当前邮件的密钥（v2 用 CEK、v1 用
+// KEK，见 mailAttKey）解密成 Blob 再预览/下载；密文绝不直接交给浏览器。
+// 明文附件（无 encoding 标记，含本修复前的老附件）仍走原来的直链。
+async function fetchDecryptAtt(att) {
+  const res = await fetch(cvtR2Url(att.key))
+  if (!res.ok) throw new Error('fetch failed ' + res.status)
+  const envelope = await res.text()
+  const bytes = await decryptBytes(envelope, mailAttKey.value)
+  return new Blob([bytes], {type: att.mimeType || 'application/octet-stream'})
+}
+
+function downloadBlob(blob, filename) {
+  const blobUrl = URL.createObjectURL(blob)
+  const a = document.createElement('a')
+  a.href = blobUrl
+  a.download = filename || ''
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(blobUrl), 60000)
+}
+
+async function downloadAtt(att) {
+  if (!att?.key) return
+  if (att.encoding === 'e2ee-v1') {
+    if (e2eeState.value !== 'ready' || !mailAttKey.value) {
+      ElMessage({message: t('e2eeNeedPassword'), type: 'error', plain: true})
+      return
+    }
+    try {
+      downloadBlob(await fetchDecryptAtt(att), att.filename)
+    } catch (e) {
+      console.error(e)
+      ElMessage({message: t('e2eeDecryptFailed'), type: 'error', plain: true})
+    }
+    return
+  }
+  const a = document.createElement('a')
+  a.href = cvtR2Url(att.key)
+  a.download = att.filename || ''
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+}
+
+async function showImage(att) {
+  const key = typeof att === 'string' ? att : att?.key
   if (!isImage(key)) return;
+  if (att && typeof att === 'object' && att.encoding === 'e2ee-v1') {
+    if (e2eeState.value !== 'ready' || !mailAttKey.value) {
+      ElMessage({message: t('e2eeNeedPassword'), type: 'error', plain: true})
+      return
+    }
+    try {
+      const blob = await fetchDecryptAtt(att)
+      const blobUrl = URL.createObjectURL(blob)
+      srcList.length = 0
+      srcList.push(blobUrl)
+      showPreview.value = true
+      return
+    } catch (e) {
+      console.error(e)
+      ElMessage({message: t('e2eeDecryptFailed'), type: 'error', plain: true})
+      return
+    }
+  }
   const url = cvtR2Url(key)
   srcList.length = 0
   srcList.push(url)

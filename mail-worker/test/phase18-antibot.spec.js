@@ -10,6 +10,7 @@ import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
 import reqUtils from '../src/utils/req-utils';
 import { isBotUa, isBlankUa, isBotRegisterUa, isRandom9Name } from '../src/utils/bot-fingerprint';
+import { registerNew, loginNew } from './auth-helpers.js';
 
 const TEST_JWT_SECRET = 'phase1-local-test-only-not-a-real-secret';
 const CHROME_UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
@@ -34,12 +35,7 @@ function api(path, { method = 'GET', body, token, ip, ua } = {}) {
 // ua 缺省 = 不发 User-Agent 头（服务端读到空白，与脚本/curl 行为一致）。
 async function register(email, ip, extra = {}) {
 	const { ua, ...body } = extra;
-	return api('/register', {
-		method: 'POST',
-		ip,
-		ua,
-		body: { email, password: 'password123', ...body }
-	});
+	return registerNew(api, email, { ip, ua, extra: body });
 }
 
 // setting 字段（camelCase）同时写 D1 与 KV 缓存（复用 phase1.spec.js 的口径）。
@@ -251,8 +247,13 @@ describe('注册日志 UA 记录（占位行补 ua）', () => {
 		expect(row.ua).toBe(CHROME_UA);
 	});
 
-	it('占位后失败的注册（密码过短）日志行也记下真实 UA', async () => {
-		const res = await register('ualog2@example.com', '203.0.118.2', { ua: CHROME_UA, password: '12345' });
+	it('占位后失败的注册（登录密钥无效）日志行也记下真实 UA', async () => {
+		// 2026-11-12 uwu 第 1 步：服务端不再见口令，短密码已无法再触发注册失败；
+		// 失败触发改成无效登录密钥（400 invalidLoginKey），仍验失败日志记真实 UA。
+		const res = await api('/register', {
+			method: 'POST', ip: '203.0.118.2', ua: CHROME_UA,
+			body: { email: 'ualog2@example.com', loginKey: 'not-a-valid-login-key', salt: 'AAAAAAAAAAAAAAAAAAAAAA==' },
+		});
 		expect(res.json.code).not.toBe(200);
 		const row = await env.db.prepare(
 			`SELECT result, ua FROM register_log WHERE email = 'ualog2@example.com' ORDER BY log_id DESC LIMIT 1`

@@ -14,6 +14,7 @@
 // 运行：mail-worker 下 npx vitest run test/challenge.spec.js。
 import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
+import { registerNew, loginNew } from './auth-helpers.js';
 import '../src/api/challenge-api.js';
 
 const TEST_JWT_SECRET = 'phase1-local-test-only-not-a-real-secret';
@@ -53,11 +54,7 @@ async function api(path, { method = 'GET', body, ip } = {}) {
 }
 
 async function register(email, ip) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123' }
-	});
+	return registerNew(api, email, { ip });
 }
 
 async function insertEmail({ userId, subject, content, e2ee, createTime }) {

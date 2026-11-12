@@ -108,15 +108,81 @@ const userService = {
 		}
 	},
 
+	// 登录凭证校验 + v1→新口径机会迁移（2026-11-12 uwu 第 1+3 步）。
+	//   新口径行（password 列带 'pbkdf2$210000$lk$' 前缀）：只验 loginKey；
+	//     password 字段一律忽略。loginKey 缺失时返回 client-outdated
+	//     （旧版缓存页面只发 password，提示刷新；绝不拿 password 去验新口径行）。
+	//   v1 旧行：验 password（旧 SHA-256，含空格自愈）；通过后用 loginKey
+	//     （浏览器发的优先，否则服务端自算）存成新验证器，migrated=true。
+	//     迁移失败不阻断登录（返回 ok:true、migrated:false）。
+	//   返回 { ok, migrated, reason }，reason: 'bad-credential' | 'client-outdated'。
+	//   胁迫口令不在这里验（login-service 另行调 decoyService）。
+	async verifyLoginCredential(c, userRow, { loginKey, password }) {
+		const stored = String(userRow.password || '');
+		const lk = String(loginKey || '').trim();
+		if (!saltHashUtils.isLegacyHash(stored)) {
+			if (!lk) {
+				return { ok: false, migrated: false, reason: 'client-outdated' };
+			}
+			const ok = await saltHashUtils.verifyLoginKey(lk, userRow.salt, stored);
+			return { ok, migrated: false, reason: ok ? undefined : 'bad-credential' };
+		}
+		const pwd = String(password || '').trim();
+		if (!pwd) {
+			return { ok: false, migrated: false, reason: 'bad-credential' };
+		}
+		let ok = await saltHashUtils.verifyLegacyPassword(pwd, userRow.salt, stored);
+		if (!ok) {
+			for (const variant of [pwd + ' ', ' ' + pwd]) {
+				if (await saltHashUtils.verifyLegacyPassword(variant, userRow.salt, stored)) {
+					ok = true;
+					break;
+				}
+			}
+		}
+		if (!ok) {
+			return { ok: false, migrated: false, reason: 'bad-credential' };
+		}
+		let migrated = false;
+		try {
+			let useLk = lk;
+			if (!useLk) {
+				useLk = await saltHashUtils.deriveLoginKeyOnly(pwd, userRow.salt);
+			}
+			const hash = await saltHashUtils.hashLoginKey(useLk, userRow.salt);
+			await orm(c).update(user).set({ password: hash }).where(eq(user.userId, userRow.userId)).run();
+			migrated = true;
+		} catch (e) {
+			console.error('登录凭证 v1→新口径迁移失败（不阻断登录）:', e.message);
+		}
+		return { ok: true, migrated, reason: undefined };
+	},
+
+	// 改密（2026-11-12 uwu 第 1 步）：口令永远不出浏览器，主入口是
+	// { loginKey, salt }（浏览器已派生 + 生成新盐，见 authkeys.js）；
+	// { password } 只剩受信通道（管理员改密 setPwd、旧版缓存页面）——
+	// 服务端自算 loginKey 并生成新盐。调用方：/my/resetPassword（改密）、
+	// recovery-service（忘密码重置）、setPwd（管理员），以及登录迁移桥
+	// （verifyLoginCredential 内部直接写库，不走这里）。
 	async resetPassword(c, params, userId) {
-
-		const { password } = params;
-
+		const loginKey = String(params.loginKey || '').trim();
+		const salt = String(params.salt || '').trim();
+		if (loginKey && salt) {
+			if (!saltHashUtils.isB64Bytes(loginKey, 32) || !saltHashUtils.isB64Bytes(salt, 16)) {
+				throw new BizError(t('invalidLoginKey'), 400);
+			}
+			const hash = await saltHashUtils.hashLoginKey(loginKey, salt);
+			await orm(c).update(user).set({ password: hash, salt: salt }).where(eq(user.userId, userId)).run();
+			return;
+		}
+		const password = String(params.password || '');
 		if (password.length < 6) {
 			throw new BizError(t('pwdMinLength'));
 		}
-		const { salt, hash } = await cryptoUtils.hashPassword(password);
-		await orm(c).update(user).set({ password: hash, salt: salt }).where(eq(user.userId, userId)).run();
+		const newSalt = saltHashUtils.generateSalt();
+		const { loginKey: lk } = await saltHashUtils.deriveAuthKeys(password, newSalt);
+		const hash = await saltHashUtils.hashLoginKey(lk, newSalt);
+		await orm(c).update(user).set({ password: hash, salt: newSalt }).where(eq(user.userId, userId)).run();
 	},
 
 	selectByEmail(c, email) {
@@ -256,7 +322,7 @@ const userService = {
 	// 双重确认：密码（有密码的账号必须通过；无密码的 OAuth 账号跳过）+
 	// 确认文字必须为 DELETE。管理员账号拒绝自助彻底删除。
 	async hardDeleteSelf(c, userId, params = {}) {
-		const { password = '', confirmText = '' } = params;
+		const { password = '', loginKey = '', confirmText = '' } = params;
 		const userRow = await this.selectByIdIncludeDel(c, userId);
 		if (!userRow) {
 			throw new BizError(t('authExpired'), 401);
@@ -269,8 +335,9 @@ const userService = {
 			throw new BizError(t('hardDeleteConfirmMismatch'), 400);
 		}
 		if (userRow.password) {
-			if (!await cryptoUtils.verifyPassword(password, userRow.salt, userRow.password)) {
-				throw new BizError(t('IncorrectPwd'), 400);
+			const cred = await this.verifyLoginCredential(c, userRow, { loginKey, password });
+			if (!cred.ok) {
+				throw new BizError(cred.reason === 'client-outdated' ? t('loginClientOutdated') : t('IncorrectPwd'), 400);
 			}
 		}
 		// physicsDelete 内已写 user:physics-delete 审计（只记用户 id，不含内容），不再重复记。
@@ -587,7 +654,11 @@ const userService = {
 			throw new BizError(t('roleNotExist'));
 		}
 
-		const { salt, hash } = await saltHashUtils.hashPassword(password);
+		// 管理员建号：管理端提供的口令经服务端同款派生（PBKDF2-600k + HKDF）
+		// 算登录密钥再存验证器（受信管理通道的例外；用户首次登录即走新口径）。
+		const salt = saltHashUtils.generateSalt();
+		const { loginKey } = await saltHashUtils.deriveAuthKeys(password, salt);
+		const hash = await saltHashUtils.hashLoginKey(loginKey, salt);
 
 		const userId = await userService.insert(c, { email, password: hash, salt, type });
 

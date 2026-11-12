@@ -8,6 +8,7 @@
 import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
 import emailService from '../src/service/email-service';
+import { registerNew, loginNew } from './auth-helpers.js';
 import mailTrustService, {
 	sanitizeRemoteImages, parseAuthResults, parseListUnsubscribe
 } from '../src/service/mail-trust-service';
@@ -39,15 +40,11 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 }
 
 async function register(email, ip, extra = {}) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123', ...extra }
-	});
+	return registerNew(api, email, { ip, extra });
 }
 
 async function login(email, ip, password = 'password123') {
-	return api('/login', { method: 'POST', ip, body: { email, password } });
+	return loginNew(api, email, { ip, password });
 }
 
 async function makeUser(email) {

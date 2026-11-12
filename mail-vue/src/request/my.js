@@ -66,16 +66,16 @@ export function getCanary() {
     return http.get('/my/canary', {noMsg: true})
 }
 
-export function resetPassword(password) {
-    return http.put('/my/resetPassword', {password})
+export function resetPassword(loginKey, salt) {
+    return http.put('/my/resetPassword', {loginKey, salt})
 }
 
 export function userDelete() {
     return http.delete('/my/delete')
 }
 
-// 自助彻底删除：双重确认（密码 + 输入 DELETE），物理删除全部数据，不可恢复。
-export function hardDeleteMyAccount(password, confirmText) {
-    return http.post('/my/hard-delete', { password, confirmText })
+// 自助彻底删除：双重确认（登录密钥 + 输入 DELETE），物理删除全部数据，不可恢复。
+export function hardDeleteMyAccount(loginKey, confirmText) {
+    return http.post('/my/hard-delete', { loginKey, confirmText })
 }
 

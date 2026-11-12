@@ -11,7 +11,6 @@ import verifyUtils from '../utils/verify-utils';
 import accountService from './account-service';
 import settingService from './setting-service';
 import saltHashUtils from '../utils/crypto-utils';
-import cryptoUtils from '../utils/crypto-utils';
 import turnstileService from './turnstile-service';
 import roleService from './role-service';
 import regKeyService from './reg-key-service';
@@ -39,7 +38,6 @@ import ratelimit from '../kernel/ratelimit';
 import kernelAudit from '../kernel/audit';
 import alertLogService from './alert-log-service';
 import decoyService from './decoy-service';
-import zkService from './zk-service';
 import { sleep } from '../utils/time-utils';
 
 // Phase 8 B · 登录限流默认值（setting 未迁移/读不到时兜底；迁移后管理员可在
@@ -89,7 +87,7 @@ const loginService = {
 	// 日志写入本身永不抛错（registerLogService.record 内部 try/catch），不影响主流程。
 	async register(c, params) {
 
-		const { email, password, token, code } = params;
+		const { email, token, code } = params;
 		const ip = reqUtils.getIp(c);
 		const ipSegment = reqUtils.getIpSegment(c);
 		const ua = c.req.header('user-agent') || '';
@@ -132,11 +130,13 @@ const loginService = {
 
 	async _register(c, params, ctx) {
 
-		// 后端 trim（与 11:43 前端 trim 对齐，双保险）：手机键盘常在邮箱/密码前后误加空格，
-		// 注册与登录须用同一处理，否则注册成功却登不上。注意：门禁日志与后续校验都用 trim 后的值。
-		let { email, password, token, code } = params;
+		// 后端 trim（双保险）：邮箱/登录密钥/盐去空白。注意：口令本身绝不发给
+		// 服务端——浏览器先跑 PBKDF2-600k + HKDF 一分二（见 crypto-utils.js），
+		// 只发登录密钥 + 浏览器生成的盐（uwu 第 1 步）。
+		let { email, loginKey, salt, token, code } = params;
 		email = String(email || '').trim();
-		password = String(password || '').trim();
+		loginKey = String(loginKey || '').trim();
+		salt = String(salt || '').trim();
 		const { ip, ipSegment } = ctx;
 
 		let { regKey, register, registerVerify, regVerifyCount, minEmailPrefix, emailPrefixFilter,
@@ -242,12 +242,19 @@ const loginService = {
 			}
 		}
 
-		if (password.length > 30) {
-			throw new BizError(t('pwdLengthLimit'));
-		}
-
-		if (password.length < 6) {
-			throw new BizError(t('pwdMinLength'));
+		// 口令强度底线：服务端再也见不到口令原文，长度上下限改由客户端强制
+		//（注册表单 ≥6 位）；服务端只剩浏览器上报的 pwdScore（0–5）可作底线：
+		// 0 分意味着 <8 位且单一大小写、无数字、无符号——等同于旧口径下最弱
+		// 的口令，直接拒。注意：这是诚实客户端的底线，恶意客户端可虚报分数
+		//（见汇报）；真正防线是 PBKDF2-600k（离线慢猜）+ 登录限流（在线慢猜）。
+		// 只在客户端真上报了分数时强制：服务端流程（OAuth 绑定、管理员建号）
+		// 不报分数（口令是服务端生成的随机串），不上底线——缺 loginKey 时
+		// 后面的格式校验仍会 400，不会放行无凭证注册。
+		const reportedScore = (params.pwdScore === undefined || params.pwdScore === null)
+			? null
+			: Math.max(0, Math.min(5, Number(params.pwdScore) || 0));
+		if (reportedScore !== null && reportedScore < 1) {
+			throw new BizError(t('pwdTooWeak'), 400);
 		}
 
 		if (!c.env.domain.includes(emailUtils.getDomain(email))) {
@@ -310,7 +317,13 @@ const loginService = {
 			await turnstileService.verify(c,token)
 		}
 
-		const { salt, hash } = await saltHashUtils.hashPassword(password);
+		// 登录凭证：浏览器发来的登录密钥（base64 32 字节）+ 盐（base64 16 字节）。
+		// 格式不对直接拒（400）；服务端只存登录密钥的慢 hash，见 crypto-utils。
+		// 旧版缓存页面若还发 password 字段，一律忽略——注册必须走新口径。
+		if (!saltHashUtils.isB64Bytes(loginKey, 32) || !saltHashUtils.isB64Bytes(salt, 16)) {
+			throw new BizError(t('invalidLoginKey'), 400);
+		}
+		const hash = await saltHashUtils.hashLoginKey(loginKey, salt);
 
 		let consumedCode = null
 		const usingRegKey = regKey !== settingConst.regKey.CLOSE && type
@@ -367,11 +380,14 @@ const loginService = {
 			return {regVerifyOpen: row.count >= regVerifyCount}
 		}
 
-		// 注册即记密码强度桶（KV，只存 0–5 级，不存密码本身，供安全评分读取），
-		// 与登录时的逻辑一致；否则新用户安全评分里密码强度项恒为 0。
+		// 注册即记密码强度桶（KV，只存 0–5 级，不存密码本身，供安全评分读取）。
+		// 分数由浏览器随注册请求上报（它手里有口令原文；服务端再也见不到口令，
+		// 只能信客户端的分数，故夹到 0–5，写坏了也只影响评分展示）。
+		// 否则新用户安全评分里密码强度项恒为 0。
 		try {
+			const score = Math.max(0, Math.min(5, Number(params.pwdScore) || 0));
 			await c.env.kv.put('pwd_strength:' + userId,
-				JSON.stringify({ score: this.passwordStrength(password), at: new Date().toISOString() }),
+				JSON.stringify({ score, at: new Date().toISOString() }),
 				{ expirationTtl: 90 * 86400 });
 		} catch (e) {
 			// best-effort，不阻断注册
@@ -469,14 +485,50 @@ const loginService = {
 		return { type: regKeyRow.roleId, regKeyId: regKeyRow.regKeyId };
 	},
 
+	// 取登录盐（公开接口 GET /login/salt?email=，供浏览器登录前派生用）。
+	// 返回 { salt, version, decoySalt? }：version 1 = 旧 SHA-256 凭证待迁移，
+	// version 2 = 新口径；decoySalt 仅在胁迫密码已开通时返回（不开通不返回，
+	// 避免泄露“该号设了胁迫密码”）。未知邮箱/已注销/已禁用一律返回随机盐 +
+	// version 2，不透露账号是否存在（登录时再以通用错误拒绝）。
+	async getLoginSalt(c, email) {
+		const addr = String(email || '').trim();
+		const userRow = addr ? await userService.selectByEmailIncludeDel(c, addr) : null;
+		if (!userRow || userRow.isDel === isDel.DELETE || userRow.status === userConst.status.BAN) {
+			return { salt: saltHashUtils.generateSalt(), version: 2 };
+		}
+		const out = {
+			salt: userRow.salt || saltHashUtils.generateSalt(),
+			version: saltHashUtils.isLegacyHash(userRow.password) ? 1 : 2
+		};
+		try {
+			const decoy = await decoyService.getStatus(c, userRow.userId);
+			if (decoy && decoy.enabled === 1) {
+				const row = await decoyService.getRow(c, userRow.userId);
+				if (row && row.salt) out.decoySalt = row.salt;
+			}
+		} catch (e) {
+			// best-effort：胁迫盐读不到时不带，胁迫登录本次会走旧口径兜底
+		}
+		return out;
+	},
+
 	async login(c, params, noVerifyPwd = false) {
 
-		// 后端 trim（与注册端对齐；前端 11:43 已 trim，这里是双保险）。
-		let { email, password, zk } = params;
+		// 凭证模型（2026-11-12 uwu 第 1+3 步）：口令永远不出浏览器。
+		// 新客户端只发 {email, loginKey}（+ 胁迫用户另发 decoyLoginKey）；
+		// 老用户迁移时另发一次 password（仅此一次，验旧 SHA-256 hash 用），
+		// 旧版缓存页面只发 password 时服务端在迁移桥里自算 loginKey。
+		// noVerifyPwd=true（OAuth 登录）跳过整个凭证段。
+		let { email, password, loginKey, decoyLoginKey, pwdScore } = params;
 		email = String(email || '').trim();
 		password = String(password || '').trim();
+		loginKey = String(loginKey || '').trim();
+		decoyLoginKey = String(decoyLoginKey || '').trim();
 
-		if ((!email || !password) && !noVerifyPwd) {
+		if (!email && !noVerifyPwd) {
+			throw new BizError(t('emailAndPwdEmpty'));
+		}
+		if (!noVerifyPwd && !password && !loginKey) {
 			throw new BizError(t('emailAndPwdEmpty'));
 		}
 
@@ -534,57 +586,38 @@ const loginService = {
 			}
 		}
 
-		// 零知识挑战（v3_16DB）：登录请求带了 zk 字段时，先验挑战再验密码；
-		// 挑战无效按一次登录失败计数（防用挑战接口绕过登录限流）。
-		// response = SHA-256(verifier + nonce) base64，其中
-		// verifier = SHA-256(salt + password)；服务端只存 zkSalt/zkVerifier
-		// （验证子），用 verifier 重算比对，绝不把 response 当密码存。
-		if (!noVerifyPwd && zk && typeof zk === 'object' && zk.challengeId) {
-			const zkOk = await zkService.verifyResponse(c, userRow, zk.challengeId, zk.response);
-			if (!zkOk) {
-				await fail(new BizError(t('zkChallengeInvalid'), 401));
-			}
-		}
-
-		// 密码校验 +  legacy 自愈：11:43 前端 trim 修复之前，手机键盘常在密码末尾误加空格，
-		// 那些账号的密码 hash 是按带空格版本存的；现在前端统一 trim 后它们永远登不上。
-		// 依次尝试 trim 版 → 尾空格 → 首空格；命中带空格版本时用 trim 版重算 hash 存回（自愈），
-		// 下次直接用 trim 版登录。OAuth 登录（noVerifyPwd）跳过此段。
+		// 凭证校验（user-service.verifyLoginCredential，含 v1→新口径的机会迁移）。
+		// 主凭证不对时试胁迫登录密钥：命中则签发诱饵会话（JWT 含 decoy=1），
+		// 不记失败、不上锁、不告警；不命中时报错文案与普通登录失败完全一致
+		// （不透露“胁迫密码存在”）。
+		// 胁迫口令本身绝不以明文发给服务端——客户端已用胁迫盐派生好
+		// decoyLoginKey（见 decoy-service.js）；老客户端（只发 password）
+		// 的胁迫登录走迁移桥：服务端用 password 验旧胁迫 hash，同时把胁迫
+		// 验证器迁到新口径。
 		if (!noVerifyPwd) {
-			let pwdOk = await cryptoUtils.verifyPassword(password, userRow.salt, userRow.password);
-			let healed = false;
-			if (!pwdOk) {
-				for (const variant of [password + ' ', ' ' + password]) {
-					if (await cryptoUtils.verifyPassword(variant, userRow.salt, userRow.password)) {
-						pwdOk = true;
-						healed = true;
-						break;
-					}
+			const cred = await userService.verifyLoginCredential(c, userRow, { loginKey, password });
+			if (!cred.ok) {
+				if (cred.reason === 'client-outdated') {
+					throw new BizError(t('loginClientOutdated'), 400);
 				}
-			}
-			if (!pwdOk) {
-				// 胁迫密码（v3_16DB）：主密码不对时，试第二密码；命中则签发诱饵
-				// 会话（JWT 含 decoy=1），不记失败、不上锁、不告警；
-				// 不命中时报错文案与普通登录失败完全一致（不透露“胁迫密码存在”）。
-				if (await decoyService.verifySecondPassword(c, userRow.userId, password)) {
+				if (decoyLoginKey && await decoyService.verifySecondLoginKey(c, userRow.userId, decoyLoginKey)) {
+					return this._issueSession(c, userRow, { decoy: true });
+				}
+				if (password && await decoyService.verifySecondPassword(c, userRow.userId, password, decoyLoginKey)) {
 					return this._issueSession(c, userRow, { decoy: true });
 				}
 				await fail(new BizError(t('authErrLoginFailed')));
 			}
-			if (healed) {
-				try {
-					await userService.resetPassword(c, { password }, userRow.userId);
-				} catch (e) {
-					console.error('登录密码自愈失败（不阻断登录）:', e.message);
-				}
-			}
 		}
 
-		// 密码通过：记密码强度桶（KV，只存 0–5 级，不存密码本身，供安全评分读取）。
-		if (!noVerifyPwd && password) {
+		// 登录成功记密码强度桶（KV，只存 0–5 级，不存密码本身，供安全评分读取）。
+		// 分数由浏览器随登录请求上报（它手里有口令原文）；旧版缓存页面没带分数
+		// 时不写，沿用旧值。
+		if (!noVerifyPwd && pwdScore !== undefined && pwdScore !== null) {
 			try {
+				const score = Math.max(0, Math.min(5, Number(pwdScore) || 0));
 				await c.env.kv.put('pwd_strength:' + userRow.userId,
-					JSON.stringify({ score: this.passwordStrength(password), at: new Date().toISOString() }),
+					JSON.stringify({ score, at: new Date().toISOString() }),
 					{ expirationTtl: 90 * 86400 });
 			} catch (e) {
 				// best-effort，不阻断登录

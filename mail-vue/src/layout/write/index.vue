@@ -253,7 +253,7 @@ import {useI18n} from "vue-i18n";
 import {friendlySendError} from "@/utils/send-error.js";
 import {getSecurity} from "@/request/security.js";
 import {aiCompose, aiReply, aiErrorI18nKey, aiComposeStream, aiReplyStream} from "@/request/ai.js";
-import {hasMemoryKey, getMemoryKey, unlockWithPassword, isInternalEmail, generateCek, encryptEmailPartsV2, sealSender, wrapCekSym, computeDeniableTag, computeBlindToken, extractKeywords, getMemoryBlindKey} from "@/utils/e2ee.js";
+import {hasMemoryKey, getMemoryKey, unlockWithPassword, isInternalEmail, generateCek, encryptEmailPartsV2, sealSender, wrapCekSym, computeDeniableTag, computeBlindToken, extractKeywords, getMemoryBlindKey, encryptBytes, b64ToBuf, bufToB64, computeFakeBlindTokens} from "@/utils/e2ee.js";
 // 斯诺登第四批 P0-1：附件 EXIF 剥离（发信前去掉 GPS/相机/拍摄时间）。
 import { stripExifFromFile } from "@/utils/exif-strip.js";
 import ExifStripNotice from "@/components/exif-strip-notice/index.vue";
@@ -856,7 +856,8 @@ async function sendEmail() {
   }
 
   // 第六阶段 C 路：E2EE 开启时加密 text/content 后发信并传 e2ee: 1；只加密副本 payload，
-  // 不改 form（避免密文留在编辑器/草稿里）。附件本阶段不加密。
+  // 不改 form（避免密文留在编辑器/草稿里）。附件也用该信的 CEK 加密
+  // （encoding='e2ee-v1'；2026-11-12 白帽反馈修复），老附件仍明文。
   // 斯诺登第二批（v3_15DB）：v2 信封——每封信单独生成一次性密钥 CEK，正文用 CEK
   // 加密；发件人用 CEK 密封成 sealedSender；CEK 按收件人分别包裹（对方有
   // ML-KEM-768 公钥时抗量子包裹，否则对称包裹）；发件人自己的那份用 KEK 对称包裹
@@ -917,6 +918,22 @@ async function sendEmail() {
       }
       // 发件人自己的包裹（已发送副本用，恒为对称包裹；缺了它后端会 400 拒发）。
       cekWraps.push({to: form.sendEmail, alg: 'sym', wrapped: await wrapCekSym(cekRaw, kek)})
+      // 白帽反馈修复（2026-11-12）：附件也用该信的 CEK 加密成 e2ee:v1: 信封，
+      // 再包一层 base64 放进 payload（后端 saveSendAtt 解一层 base64 后存的
+      // 就是信封字节），并置 encoding='e2ee-v1' 标记。只加密 payload 里的
+      // 副本：先深拷贝附件数组，form 本身不动（避免密文留在编辑器/草稿里、
+      // 也避免撤回重发时重复加密）。加密失败直接抛给外层 catch
+      // （e2eeEncryptFailed）——宁可发不出去，不把明文附件发出去。
+      if (payload.attachments && payload.attachments.length) {
+        payload.attachments = payload.attachments.map(a => ({...a}))
+        for (const att of payload.attachments) {
+          if (!att || !att.content) continue
+          const raw = b64ToBuf(String(att.content))
+          const envelope = await encryptBytes(raw, cekKey)
+          att.content = bufToB64(new TextEncoder().encode(envelope))
+          att.encoding = 'e2ee-v1'
+        }
+      }
       // 诚实提示：有收件人回落到对称包裹时，对方没有抗量子密钥，只有与发件人
       // 共用同一加密密码才能解密（v1 模型的既有前提；ML-KEM 路径不受此限）。
       // 发信后 2 秒内可撤回（undo），故用警告提示而不拦截。
@@ -950,6 +967,8 @@ async function sendEmail() {
       }
       // 盲索引：从标题 + 纯文本提关键词，用盲索引密钥算 token 随信发；
       // 服务端只存 token，不解密正文。失败时不阻断发信（该信只是搜不到）。
+      // 假 token 填充（2026-11-12 白帽反馈修复）：另附 16 个假 token，让服务
+      // 端无法从 token 分布反推哪些信共享词；搜索只查真实 token，无假阳性。
       let blindTokens = []
       try {
         const blindKey = getMemoryBlindKey()
@@ -957,6 +976,9 @@ async function sendEmail() {
           const keywords = extractKeywords((form.subject || '') + ' ' + (form.text || ''), 50)
           for (const kw of keywords) {
             blindTokens.push(await computeBlindToken(kw, blindKey))
+          }
+          for (const ft of await computeFakeBlindTokens(blindKey)) {
+            blindTokens.push(ft)
           }
         }
       } catch (e) {

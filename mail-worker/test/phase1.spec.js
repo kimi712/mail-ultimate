@@ -13,6 +13,7 @@ import turnstileService from '../src/service/turnstile-service';
 import quotaService from '../src/service/quota-service';
 import telegramService from '../src/service/telegram-service';
 import verifyRecordService from '../src/service/verify-record-service';
+import { registerNew, loginNew } from './auth-helpers.js';
 
 const TEST_JWT_SECRET = 'phase1-local-test-only-not-a-real-secret';
 const TEST_IP_OK = '203.0.113.1';
@@ -48,15 +49,11 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 }
 
 async function register(email, ip, extra = {}) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123', ...extra }
-	});
+	return registerNew(api, email, { ip, extra });
 }
 
 async function login(email, password = 'password123') {
-	const res = await api('/login', { method: 'POST', body: { email, password } });
+	const res = await loginNew(api, email, { password });
 	expect(res.json.code).toBe(200);
 	return res.json.data.token;
 }

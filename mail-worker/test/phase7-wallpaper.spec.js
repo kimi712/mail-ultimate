@@ -8,6 +8,7 @@
 // 未绑 R2 时上传走 r2Service 的 KV 回落（与 setBackground 一致），/oss/ 读回即验证该路径。
 import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
+import { registerNew, loginNew } from './auth-helpers.js';
 
 const IP_A = '203.0.113.31';
 
@@ -30,15 +31,11 @@ async function api(path, { method = 'GET', body, token, ip, rawHeaders } = {}) {
 }
 
 async function register(email, ip, extra = {}) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123', ...extra }
-	});
+	return registerNew(api, email, { ip, extra });
 }
 
 async function login(email, ip, password = 'password123') {
-	return api('/login', { method: 'POST', ip, body: { email, password } });
+	return loginNew(api, email, { ip, password });
 }
 
 const SETTING_COLUMN_MAP = {

@@ -3,7 +3,9 @@
 // salt 本身不是密钥，可随 POST /my/security 存后端（GET /my/security 的 e2eeSalt）。
 // 信封格式：`e2ee:v1:<base64(iv(12B) || ciphertext)>`，AES-GCM 256，
 // 密钥由用户输入的加密密码经 PBKDF2-HMAC-SHA256（210000 次）派生。
-// 附件本阶段不加密（见安全中心页文案）。
+// 附件（2026-11-12 起）：E2EE 站内信的附件在发信时用该封信的密钥
+// （v2 用 CEK，v1 用 KEK）加密成同一信封格式后再上传，服务端只存密文；
+// 读信时用同一密钥解密；老附件（无加密标记）仍按明文走。
 
 export const E2EE_ENVELOPE_PREFIX = 'e2ee:v1:';
 export const PBKDF2_ITERATIONS = 210000;
@@ -391,6 +393,35 @@ export function extractKeywords(text, maxCount = 50) {
 		.map(w => w.trim().toLowerCase())
 		.filter(w => w.length >= 2 && w.length <= 32 && /[a-z0-9\u4e00-\u9fff]/.test(w));
 	return [...new Set(words)].slice(0, maxCount);
+}
+
+// 假 token 填充（2026-11-12 白帽反馈修复）：盲索引的访问模式泄露——
+// 服务端能看到哪些信共享同一个 token。发信/读信建索引时，除真实 token 外
+// 再附若干假 token：HMAC(盲密钥, 'fake:' + 随机池下标)，服务端无法区分真假，
+// 搜索只查真实 token，无假阳性。假 token 由客户端生成（服务端自己加噪无用，
+// 它分得清自己造的）；每封固定 16 个、池 4096。
+export const FAKE_BLIND_TOKEN_COUNT = 16;
+export const FAKE_BLIND_TOKEN_POOL = 4096;
+
+export async function computeFakeBlindTokens(blindKey, count = FAKE_BLIND_TOKEN_COUNT) {
+	const k = blindKey || memoryBlindKey;
+	if (!k) {
+		return [];
+	}
+	const n = Math.max(0, Math.min(Number(count) || 0, 64));
+	if (!n) return [];
+	const picked = new Set();
+	const rand = new Uint32Array(n * 2);
+	globalThis.crypto.getRandomValues(rand);
+	for (const r of rand) {
+		picked.add(r % FAKE_BLIND_TOKEN_POOL);
+		if (picked.size >= n) break;
+	}
+	const out = [];
+	for (const i of picked) {
+		out.push(await hmacSha256Hex(k, 'fake:' + i));
+	}
+	return out;
 }
 
 // 判断是否为密封发件人信封（第二批功能；第三批编辑时误删过一次，勿再删）。

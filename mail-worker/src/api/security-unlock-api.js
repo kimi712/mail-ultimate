@@ -1,13 +1,12 @@
 // Phase 7：闲置自动锁定的解锁接口（最小实现）。
-// POST /security/unlock {password}：仅校验登录密码是否正确，不签发新会话、
+// POST /security/unlock {loginKey}：仅校验登录密钥是否正确，不签发新会话、
 // 不轮换 token、不改 KV（锁定只是前端界面态，会话本身一直有效）。
-// 防猜：连续失败 5 次后锁 5 分钟（KV UNLOCK_FAIL 计数，TTL 300 秒，
-// 与 TOTP 的 5 次锁定同一口径）；成功后清零。
+// 旧版缓存页面发明文密码，走迁移桥。防猜：连续失败 5 次后锁 5 分钟
+// （KV UNLOCK_FAIL 计数，TTL 300 秒，与 TOTP 的 5 次锁定同一口径）；成功后清零。
 import app from '../hono/hono';
 import result from '../model/result';
 import userContext from '../security/user-context';
 import userService from '../service/user-service';
-import cryptoUtils from '../utils/crypto-utils';
 import BizError from '../error/biz-error';
 import KvConst from '../const/kv-const';
 import { t } from '../i18n/i18n';
@@ -24,8 +23,15 @@ app.post('/security/unlock', async (c) => {
 		throw new BizError(t('securityUnlockLocked'), 403);
 	}
 	const userRow = await userService.selectById(c, userId);
-	const ok = userRow && body.password
-		&& await cryptoUtils.verifyPassword(body.password, userRow.salt, userRow.password);
+	const cred = userRow
+		? await userService.verifyLoginCredential(c, userRow, { loginKey: body.loginKey, password: body.password })
+		: { ok: false, reason: 'wrong' };
+	// 客户端太旧（已迁移账号还发明文密码）：不是猜错密码，不计入失败次数，
+	// 直接提示刷新页面。
+	if (!cred.ok && cred.reason === 'client-outdated') {
+		throw new BizError(t('loginClientOutdated'), 400);
+	}
+	const ok = cred.ok;
 	if (!ok) {
 		const next = fails + 1;
 		try {

@@ -1,21 +1,22 @@
 // 斯诺登第三批测试：vitest + @cloudflare/vitest-pool-workers。
-// 覆盖：v3_16DB 迁移（email 六列 / user zk 两列 / timelock_key /
-// email_blind_index / user_decoy / decoy_email）、胁迫密码（设/改/关、
-// 主密码进真实、第二密码进诱饵、错密码通用 501、诱饵不记失败不锁、
-// 诱饵隔离：发信/联系人/别名/规则/设备/登录历史/管理路由）、
-// 零知识身份（发挑战、正确响应登录、重放失败、错响应失败、未开通拒绝）、
+// 覆盖：v3_16DB 迁移（email 六列 / user zk 三列已退役 / e2ee_exposed /
+// timelock_key / email_blind_index / user_decoy / decoy_email）、
+// 胁迫密码（设/改/关、主密码进真实、第二密码进诱饵、错密码通用 501、
+// 诱饵不记失败不锁、诱饵隔离：发信/联系人/别名/规则/设备/登录历史/管理路由；
+// 2026-11-12 uwu 第 1 步后：设/改/关发登录密钥，胁迫登录发 decoyLoginKey）、
 // 邮件混淆（站内信延迟 15–180 秒、未生效列表不可见、生效后补跑转发/规则）、
 // 时间锁（未来时刻暂存密钥、未到期解不开、到期懒释放写回、非法时刻按不锁）、
 // 可否认认证（denyTag 存库、非 E2EE 时丢弃、非法标签丢弃）、
 // 盲索引（发信存 token、收件方补传后可搜、非 E2EE 拒绝、删信清理）。
 // 注意：本测试池每个 it 之间不保留 D1 写入（快照回滚），所以每个用例
-// 必须自己做 setup（setSecondPassword / zk-setup / 发信都在用例内完成），
+// 必须自己做 setup（setSecondPassword / 发信都在用例内完成），
 // 跨用例共享的只有 beforeAll 建的用户与 token。
 // 运行：mail-worker 下 npx vitest run test/phase12-snowden3.spec.js。
 import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
 import emailService from '../src/service/email-service';
 import timelockService from '../src/service/timelock-service';
+import { registerNew, loginNew, deriveLoginKeyForTest } from './auth-helpers.js';
 
 const IP_A = '203.0.113.71';
 const IP_B = '203.0.113.72';
@@ -44,16 +45,19 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 }
 
 async function register(email, ip) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: MAIN_PWD }
-	});
+	return registerNew(api, email, { ip, password: MAIN_PWD });
 }
 
 async function login(email, ip, password = MAIN_PWD) {
-	const res = await api('/login', { method: 'POST', ip, body: { email, password } });
+	const res = await loginNew(api, email, { ip, password });
 	return res.json?.data?.token;
+}
+
+// 新口径：胁迫设/改/关要先派生主登录密钥（盐从 /login/salt 取）。
+async function mainLoginKeyFor(email, password = MAIN_PWD) {
+	const res = await api(`/login/salt?email=${encodeURIComponent(email)}`, { ip: IP_FRESH });
+	const info = res.json?.data || {};
+	return deriveLoginKeyForTest(password, info.salt || '');
 }
 
 async function loginRaw(body, ip) {
@@ -86,40 +90,22 @@ function b64(bytes) {
 	return btoa(s);
 }
 
-async function sha256b64(str) {
-	const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
-	return b64(new Uint8Array(buf));
-}
-
-function randomSaltB64() {
-	const rand = new Uint8Array(16);
-	crypto.getRandomValues(rand);
-	return b64(rand);
-}
-
 // 用例内自包含 setup：给用户 A 设胁迫密码并用它登录，返回诱饵 token。
 // setSecondPassword 是 upsert，可反复调用；seedDecoyMail 幂等。
+// 新口径：设胁迫发 {mainLoginKey, duressPassword}（主密码不出浏览器；
+// 服务端用胁迫口令派生胁迫登录密钥）。胁迫登录照真实客户端走 loginNew：
+// 用胁迫口令派生主登录密钥（会错）+ decoyLoginKey（会中），服务端先试主
+// 凭证、不中再试胁迫凭证，进诱饵会话。注意：只发 decoyLoginKey 不发
+// loginKey 会被登录入口的 emailAndPwdEmpty 守卫直接拒（真实客户端从不这么发）。
 async function getDecoyToken() {
 	const set = await api('/my/duress/set', {
 		method: 'POST', token: tokenA,
-		body: { password: MAIN_PWD, duressPassword: DURESS_PWD }
+		body: { mainLoginKey: await mainLoginKeyFor('p12-a@example.com'), duressPassword: DURESS_PWD }
 	});
 	expect(set.json.code).toBe(200);
-	const res = await loginRaw({ email: 'p12-a@example.com', password: DURESS_PWD }, IP_FRESH);
+	const res = await loginNew(api, 'p12-a@example.com', { ip: IP_FRESH, password: DURESS_PWD });
 	expect(res.json.code).toBe(200);
 	return res.json?.data?.token;
-}
-
-// 用例内自包含 setup：给用户 B 开通零知识登录，返回 { salt, verifier }。
-async function setupZk() {
-	const salt = randomSaltB64();
-	const verifier = await sha256b64(salt + MAIN_PWD);
-	const res = await api('/my/zk-setup', {
-		method: 'POST', token: tokenB,
-		body: { password: MAIN_PWD, salt, verifier }
-	});
-	expect(res.json.code).toBe(200);
-	return { salt, verifier };
 }
 
 // C→D 发一封 v2 E2EE 站内信（extra 可附加 timelockUntil / deniable / denyTag / blindTokens）。
@@ -184,11 +170,15 @@ describe('v3_16DB 迁移', () => {
 		}
 	});
 
-	it('user 表有 zk_salt / zk_verifier 两列', async () => {
+	it('user 表 zk 三列已退役、e2ee_exposed 在位', async () => {
+		// 2026-11-12 uwu 第 3 步：zk 退役，v3_20DB 删 zk_salt/zk_verifier/zk_salt2，
+		// 加 e2ee_exposed（0=正常/已统一、1=已暴露、2=老模型未迁移）。
 		const cols = await env.db.prepare(`PRAGMA table_info(user)`).all();
 		const names = (cols.results || []).map(r => r.name);
-		expect(names).toContain('zk_salt');
-		expect(names).toContain('zk_verifier');
+		expect(names).not.toContain('zk_salt');
+		expect(names).not.toContain('zk_verifier');
+		expect(names).not.toContain('zk_salt2');
+		expect(names).toContain('e2ee_exposed');
 	});
 
 	it('timelock_key / email_blind_index / user_decoy / decoy_email 四张表存在', async () => {
@@ -209,12 +199,14 @@ describe('胁迫密码（用户 A）', () => {
 	it('设置时主密码错误 → 400，不透露其他信息', async () => {
 		const res = await api('/my/duress/set', {
 			method: 'POST', token: tokenA,
-			body: { password: 'wrong-main-password', duressPassword: DURESS_PWD }
+			body: { mainLoginKey: await mainLoginKeyFor('p12-a@example.com', 'wrong-main-password'), duressPassword: DURESS_PWD }
 		});
 		expect(res.json.code).toBe(400);
 	});
 
-	it('胁迫密码与主密码相同 → 400', async () => {
+	it('胁迫密码与主密码相同 → 400（旧版明文兜底仍守）', async () => {
+		// 新口径下“胁迫≠主”由浏览器在输入时比对（服务端只见登录密钥，
+		// 无法代验）；这里走旧版缓存页面才发的明文兜底，服务端仍要拒。
 		const res = await api('/my/duress/set', {
 			method: 'POST', token: tokenA,
 			body: { password: MAIN_PWD, duressPassword: MAIN_PWD }
@@ -225,7 +217,7 @@ describe('胁迫密码（用户 A）', () => {
 	it('胁迫密码短于 8 位 → 400', async () => {
 		const res = await api('/my/duress/set', {
 			method: 'POST', token: tokenA,
-			body: { password: MAIN_PWD, duressPassword: 'short' }
+			body: { mainLoginKey: await mainLoginKeyFor('p12-a@example.com'), duressPassword: 'short' }
 		});
 		expect(res.json.code).toBe(400);
 	});
@@ -233,7 +225,7 @@ describe('胁迫密码（用户 A）', () => {
 	it('正常设置 → 200，诱饵邮件播种 8 封', async () => {
 		const res = await api('/my/duress/set', {
 			method: 'POST', token: tokenA,
-			body: { password: MAIN_PWD, duressPassword: DURESS_PWD }
+			body: { mainLoginKey: await mainLoginKeyFor('p12-a@example.com'), duressPassword: DURESS_PWD }
 		});
 		expect(res.json.code).toBe(200);
 		expect(res.json.data.enabled).toBe(true);
@@ -246,7 +238,7 @@ describe('胁迫密码（用户 A）', () => {
 	it('主密码登录仍进真实邮箱：看得到 B 发来的真信', async () => {
 		await api('/my/duress/set', {
 			method: 'POST', token: tokenA,
-			body: { password: MAIN_PWD, duressPassword: DURESS_PWD }
+			body: { mainLoginKey: await mainLoginKeyFor('p12-a@example.com'), duressPassword: DURESS_PWD }
 		});
 		const send = await api('/email/send', {
 			method: 'POST', token: tokenB,
@@ -263,7 +255,9 @@ describe('胁迫密码（用户 A）', () => {
 	});
 
 	it('错密码登录 → 通用 501，不透露胁迫密码存在', async () => {
-		const res = await loginRaw({ email: 'p12-a@example.com', password: 'totally-wrong' }, IP_FRESH);
+		// 错口令派出的登录密钥也不匹配主凭证（胁迫口令同样不对，服务端
+		// 不区分“主口令错”与“胁迫口令错”，一律 501）。
+		const res = await loginNew(api, 'p12-a@example.com', { ip: IP_FRESH, password: 'totally-wrong' });
 		expect(res.json.code).toBe(501);
 		expect(res.json?.data?.token).toBeFalsy();
 	});
@@ -271,7 +265,7 @@ describe('胁迫密码（用户 A）', () => {
 	it('胁迫密码登录成功：只见 8 封诱饵信，看不到真信', async () => {
 		await api('/my/duress/set', {
 			method: 'POST', token: tokenA,
-			body: { password: MAIN_PWD, duressPassword: DURESS_PWD }
+			body: { mainLoginKey: await mainLoginKeyFor('p12-a@example.com'), duressPassword: DURESS_PWD }
 		});
 		// 先放一封真信进 A 的收件箱（对照组）
 		const send = await api('/email/send', {
@@ -280,7 +274,8 @@ describe('胁迫密码（用户 A）', () => {
 		});
 		expect(send.json.code).toBe(200);
 		await env.db.prepare(`UPDATE email SET mix_deliver_at = '' WHERE user_id = ? AND subject = 'p12 real mail'`).bind(userIdA).run();
-		const res = await loginRaw({ email: 'p12-a@example.com', password: DURESS_PWD }, IP_FRESH);
+		// 用胁迫口令登录：主登录密钥会错、decoyLoginKey 会中，进诱饵会话。
+		const res = await loginNew(api, 'p12-a@example.com', { ip: IP_FRESH, password: DURESS_PWD });
 		expect(res.json.code).toBe(200);
 		const decoyToken = res.json?.data?.token;
 		expect(decoyToken).toBeTruthy();
@@ -311,8 +306,7 @@ describe('胁迫密码（用户 A）', () => {
 		const st = await api('/my/duress/status', { token: decoyToken });
 		expect(st.json.code).toBe(200);
 		expect(st.json.data.enabled).toBe(false);
-		const zk = await api('/my/zk-status', { token: decoyToken });
-		expect(zk.json.data.enabled).toBe(false);
+		// zk 已退役（2026-11-12），/my/zk-status 接口已删，不再检查。
 		const alias = await api('/my/alias', { token: decoyToken });
 		expect(alias.json.code).toBe(200);
 		expect((alias.json.data?.list || alias.json.data || []).length).toBe(0);
@@ -340,123 +334,20 @@ describe('胁迫密码（用户 A）', () => {
 	it('关闭时主密码错误 → 400；正常关闭后胁迫密码登录 → 501', async () => {
 		await api('/my/duress/set', {
 			method: 'POST', token: tokenA,
-			body: { password: MAIN_PWD, duressPassword: DURESS_PWD }
+			body: { mainLoginKey: await mainLoginKeyFor('p12-a@example.com'), duressPassword: DURESS_PWD }
 		});
 		const bad = await api('/my/duress/disable', {
 			method: 'POST', token: tokenA, body: { password: 'wrong-main-password' }
 		});
 		expect(bad.json.code).toBe(400);
 		const ok = await api('/my/duress/disable', {
-			method: 'POST', token: tokenA, body: { password: MAIN_PWD }
+			method: 'POST', token: tokenA, body: { mainLoginKey: await mainLoginKeyFor('p12-a@example.com') }
 		});
 		expect(ok.json.code).toBe(200);
 		expect(ok.json.data.enabled).toBe(false);
-		const res = await loginRaw({ email: 'p12-a@example.com', password: DURESS_PWD }, IP_FRESH);
+		// 关闭后 /login/salt 不再返回 decoySalt，胁迫口令派出的主登录密钥也不中 → 501。
+		const res = await loginNew(api, 'p12-a@example.com', { ip: IP_FRESH, password: DURESS_PWD });
 		expect(res.json.code).toBe(501);
-	});
-});
-
-describe('零知识身份（用户 B）', () => {
-	it('未开通时挑战照常发放（enabled=false，不透露开通状态；用从未开通的用户 D 查）', async () => {
-		const res = await api('/login/zk-challenge?email=p12-d@example.com');
-		expect(res.json.code).toBe(200);
-		expect(res.json.data.enabled).toBe(false);
-		expect(res.json.data.challengeId).toBeTruthy();
-		expect(res.json.data.nonce).toBeTruthy();
-		expect(res.json.data.salt).toBeTruthy();
-	});
-
-	it('开通时主密码错误 → 401；salt/verifier 非法 → 400', async () => {
-		const salt = randomSaltB64();
-		const verifier = await sha256b64(salt + MAIN_PWD);
-		const badPwd = await api('/my/zk-setup', {
-			method: 'POST', token: tokenB,
-			body: { password: 'wrong-main-password', salt, verifier }
-		});
-		expect(badPwd.json.code).toBe(401);
-		const badSalt = await api('/my/zk-setup', {
-			method: 'POST', token: tokenB,
-			body: { password: MAIN_PWD, salt: 'xx', verifier }
-		});
-		expect(badSalt.json.code).toBe(400);
-		const badVerifier = await api('/my/zk-setup', {
-			method: 'POST', token: tokenB,
-			body: { password: MAIN_PWD, salt, verifier: 'not-base64!' }
-		});
-		expect(badVerifier.json.code).toBe(400);
-	});
-
-	it('正常开通 → 200，服务端只存盐与验证子', async () => {
-		const { salt, verifier } = await setupZk();
-		const row = await env.db.prepare(`SELECT zk_salt, zk_verifier FROM user WHERE user_id = ?`).bind(userIdB).first();
-		expect(row.zk_salt).toBe(salt);
-		expect(row.zk_verifier).toBe(verifier);
-		const st = await api('/my/zk-status', { token: tokenB });
-		expect(st.json.data.enabled).toBe(true);
-	});
-
-	it('正确挑战-应答登录成功；同一挑战重放 → 401', async () => {
-		const { salt, verifier } = await setupZk();
-		const ch = await api('/login/zk-challenge?email=p12-b@example.com');
-		expect(ch.json.data.enabled).toBe(true);
-		expect(ch.json.data.salt).toBe(salt);
-		const response = await sha256b64(verifier + ch.json.data.nonce);
-		const res = await loginRaw({
-			email: 'p12-b@example.com', password: MAIN_PWD,
-			zk: { challengeId: ch.json.data.challengeId, response }
-		}, IP_FRESH);
-		expect(res.json.code).toBe(200);
-		expect(res.json?.data?.token).toBeTruthy();
-		// 同一挑战重放 → 401（一次有效）
-		const replay = await loginRaw({
-			email: 'p12-b@example.com', password: MAIN_PWD,
-			zk: { challengeId: ch.json.data.challengeId, response }
-		}, IP_FRESH);
-		expect(replay.json.code).toBe(401);
-	});
-
-	it('错误响应 → 401', async () => {
-		await setupZk();
-		const ch = await api('/login/zk-challenge?email=p12-b@example.com');
-		const badResponse = await sha256b64('wrong-verifier' + ch.json.data.nonce);
-		const res = await loginRaw({
-			email: 'p12-b@example.com', password: MAIN_PWD,
-			zk: { challengeId: ch.json.data.challengeId, response: badResponse }
-		}, IP_FRESH);
-		expect(res.json.code).toBe(401);
-	});
-
-	it('未开通账号（用户 D）带 zk 登录 → 401', async () => {
-		const ch = await api('/login/zk-challenge?email=p12-d@example.com');
-		expect(ch.json.data.enabled).toBe(false);
-		const response = await sha256b64('whatever-verifier' + ch.json.data.nonce);
-		const res = await loginRaw({
-			email: 'p12-d@example.com', password: MAIN_PWD,
-			zk: { challengeId: ch.json.data.challengeId, response }
-		}, IP_FRESH);
-		expect(res.json.code).toBe(401);
-	});
-
-	it('关闭后 ZK 登录 → 401', async () => {
-		const { verifier } = await setupZk();
-		const bad = await api('/my/zk-disable', {
-			method: 'POST', token: tokenB, body: { password: 'wrong-main-password' }
-		});
-		expect(bad.json.code).toBe(401);
-		const ok = await api('/my/zk-disable', {
-			method: 'POST', token: tokenB, body: { password: MAIN_PWD }
-		});
-		expect(ok.json.code).toBe(200);
-		expect(ok.json.data.enabled).toBe(false);
-		const row = await env.db.prepare(`SELECT zk_salt, zk_verifier FROM user WHERE user_id = ?`).bind(userIdB).first();
-		expect(row.zk_verifier || '').toBe('');
-		const ch = await api('/login/zk-challenge?email=p12-b@example.com');
-		const response = await sha256b64(verifier + ch.json.data.nonce);
-		const res = await loginRaw({
-			email: 'p12-b@example.com', password: MAIN_PWD,
-			zk: { challengeId: ch.json.data.challengeId, response }
-		}, IP_FRESH);
-		expect(res.json.code).toBe(401);
 	});
 });
 

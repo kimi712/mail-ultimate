@@ -28,6 +28,7 @@ import adminAuditApi from '../src/api/admin-audit-api';
 import loginAnomalyApi from '../src/api/login-anomaly-api';
 import burnApi from '../src/api/burn-after-reading-api';
 import aliasExpiryApi from '../src/api/alias-expiry-api';
+import { registerNew, loginNew } from './auth-helpers.js';
 
 const ADMIN_EMAIL = 'admin@example.com';
 const USER_EMAIL = 'burn4user@example.com';
@@ -410,7 +411,7 @@ describe('P1-4 login anomaly', () => {
 
 	it('一键锁定后状态为 BAN 且有审计；管理员解锁恢复 NORMAL', async () => {
 		const c = fakeCtx();
-		const reg = await api('/register', { method: 'POST', ip: KNOWN_IP, body: { email: 'lockme@example.com', password: PWD } });
+		const reg = await registerNew(api, 'lockme@example.com', { ip: KNOWN_IP, password: PWD });
 		expect(reg.status).toBe(200);
 		const targetId = await userIdByEmail(c, 'lockme@example.com');
 		expect(targetId).toBeGreaterThan(0);

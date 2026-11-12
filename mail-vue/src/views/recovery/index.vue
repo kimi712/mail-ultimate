@@ -13,6 +13,8 @@
         <div class="paths-hint-item"><span class="paths-num">1</span><span>{{ $t('recoveryPathsHintCode') }}</span></div>
         <div class="paths-hint-item"><span class="paths-num">2</span><span>{{ $t('recoveryPathsHintEmail') }}</span></div>
       </div>
+      <!-- 重置后旧口令加密的邮件不可读（旧密钥已丢），先明示再提交。 -->
+      <div class="desc" style="margin: 8px 0 4px">{{ $t('recoveryE2eeResetWarn') }}</div>
       <el-tabs v-model="mode">
         <el-tab-pane :label="$t('recoveryByCode')" name="code">
           <el-form label-position="top" @submit.prevent>
@@ -80,6 +82,7 @@ import { ElMessage } from 'element-plus'
 import PasswordStrengthMeter from '@/components/password-strength/index.vue'
 import { evaluatePasswordStrength } from '@/utils/password-strength.js'
 import { resetByCode, requestResetLink, resetByToken } from '@/request/recovery.js'
+import { deriveAuthKeys, generateLoginSalt } from '@/utils/authkeys.js'
 
 defineOptions({
   name: 'recovery'
@@ -102,7 +105,9 @@ const canSubmitToken = computed(() =>
 async function onResetByCode() {
   loading.value = true
   try {
-    await resetByCode(form.email, form.code, form.newPassword)
+    const salt = generateLoginSalt()
+    const keys = await deriveAuthKeys(String(form.newPassword || '').trim(), salt)
+    await resetByCode(form.email, form.code, keys.loginKey, salt)
     ElMessage({ message: 'OK', type: 'success', plain: true })
     router.push('/login')
   } finally {
@@ -123,7 +128,9 @@ async function onRequestLink() {
 async function onResetByToken() {
   loading.value = true
   try {
-    await resetByToken(form.email, form.token, form.newPassword)
+    const salt = generateLoginSalt()
+    const keys = await deriveAuthKeys(String(form.newPassword || '').trim(), salt)
+    await resetByToken(form.email, form.token, keys.loginKey, salt)
     ElMessage({ message: 'OK', type: 'success', plain: true })
     router.push('/login')
   } finally {

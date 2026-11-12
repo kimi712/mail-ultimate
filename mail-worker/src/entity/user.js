@@ -31,9 +31,9 @@ const user = sqliteTable('user', {
 	tgChatId: text('tg_chat_id').notNull().default(''),
 	tgBindCode: text('tg_bind_code').notNull().default(''),
 	tgBindExpires: text('tg_bind_expires').notNull().default(''),
-	// 斯诺登第三批（v3_16DB）：零知识身份——服务端只存验证子。
-	// zkVerifier = SHA-256(zkSalt + password) base64，单向摘要，不存可逆凭证。
-	zkSalt: text('zk_salt').notNull().default(''),
-	zkVerifier: text('zk_verifier').notNull().default('')
+	// 2026-11-12 uwu 第 2 步：E2EE 暴露状态（0=正常/已统一，1=已暴露
+	// ——加密密码与登录密码相同、服务端曾可推出邮件密钥，2=老模型未迁移）。
+	// 由登录后后台探测（e2ee-migrate.js）写入，供安全中心常驻提示。
+	e2eeExposed: integer('e2ee_exposed').default(0).notNull()
 });
 export default user

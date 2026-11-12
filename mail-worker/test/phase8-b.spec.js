@@ -19,6 +19,7 @@ import { encodeQr } from '../src/utils/qrcode';
 import ratelimit from '../src/kernel/ratelimit';
 import kernelAudit from '../src/kernel/audit';
 import { isAdminUser, adminDelaySeconds } from '../src/service/login-service';
+import { registerNew, loginNew } from './auth-helpers.js';
 
 const TEST_JWT_SECRET='phase1-local-test-only-not-a-real-secret';
 const ORIGIN = 'https://aevorynthtech.com';
@@ -54,15 +55,15 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 }
 
 async function register(email, ip, extra = {}) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123', ...extra }
-	});
+	// makeUser 会把口令放 extra 里传（{ password }）：新口径下口令是派生选项，
+	// 不是请求体字段，须抽出来传给 registerNew（直接铺进 body 会被服务端忽略，
+	// 账号会按默认口令建，强度分也跟着错）。
+	const { password, ...rest } = extra;
+	return registerNew(api, email, { ip, password: password || 'password123', extra: rest });
 }
 
 async function login(email, ip, password = 'password123') {
-	return api('/login', { method: 'POST', ip, body: { email, password } });
+	return loginNew(api, email, { ip, password });
 }
 
 async function makeUser(email, password = 'password123') {

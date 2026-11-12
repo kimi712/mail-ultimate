@@ -85,6 +85,9 @@ export const setting = sqliteTable('setting', {
 	regSegmentLimit: integer('reg_segment_limit').default(9).notNull(),
 	// 每邮箱每日发信上限（v3_19DB，默认 5；0/空 = 不额外限制，只用角色额度）。
 	daySendLimit: integer('day_send_limit').default(5).notNull(),
+	// $1000 悬赏挑战暂停开关（v3_20DB，uwu 第 5 步：默认 0=不暂停；1=暂停，
+	// 暂停时 /challenge 只显示横幅、不接受提交）。
+	challengePaused: integer('challenge_paused').default(0).notNull(),
 	resendDayBudget: integer('resend_day_budget').default(100).notNull(),
 	resendMonthBudget: integer('resend_month_budget').default(3000).notNull(),
 	// Phase 2–4：注册密钥库存告警阈值（剩余总量低于此值告警，默认 500）

@@ -12,8 +12,8 @@ import reqUtils from '../utils/req-utils';
 // ---- 登录态：恢复码管理 ----
 // 生成一组新恢复码（需当前密码；明文只返回这一次，前端必须当场展示并提醒保存）。
 app.post('/my/recovery-codes/generate', async (c) => {
-	const { password } = await c.req.json();
-	const data = await recoveryService.generateCodes(c, userContext.getUserId(c), password);
+	const { password, loginKey } = await c.req.json();
+	const data = await recoveryService.generateCodes(c, userContext.getUserId(c), { loginKey, password });
 	return c.json(result.ok(data));
 });
 

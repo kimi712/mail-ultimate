@@ -8,6 +8,7 @@
 // 注意：本文件跑在本地 miniflare（wrangler.jsonc 占位绑定），不连线上 D1/KV。
 import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
+import { registerNew, loginNew } from './auth-helpers.js';
 
 const TEST_JWT_SECRET = 'phase1-local-test-only-not-a-real-secret';
 
@@ -30,15 +31,11 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 }
 
 async function register(email, ip) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123' }
-	});
+	return registerNew(api, email, { ip });
 }
 
 async function login(email, password = 'password123') {
-	const res = await api('/login', { method: 'POST', body: { email, password } });
+	const res = await loginNew(api, email, { password });
 	expect(res.json.code).toBe(200);
 	return res.json.data.token;
 }

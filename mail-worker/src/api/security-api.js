@@ -27,8 +27,8 @@ app.post('/my/totp/enable', async (c) => {
 });
 
 app.post('/my/totp/disable', async (c) => {
-	const { password, code } = await c.req.json();
-	await totpService.disable(c, userContext.getUserId(c), password, code);
+	const { password, loginKey, code } = await c.req.json();
+	await totpService.disable(c, userContext.getUserId(c), { loginKey, password, code });
 	return c.json(result.ok());
 });
 

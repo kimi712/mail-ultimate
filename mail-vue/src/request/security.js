@@ -13,6 +13,17 @@ export function setSecurity(payload) {
 	return http.post('/my/security', payload, {noMsg: true});
 }
 
+// E2EE 密钥重包（2026-11-12 uwu 第 2 步）：取 sym 包裹 / 分批重包 / 上报暴露状态。
+export function listE2eeWraps(limit = 200, offset = 0) {
+	return http.get('/my/e2ee/wraps', {params: {limit, offset}, noMsg: true});
+}
+export function rewrapE2ee(items) {
+	return http.post('/my/e2ee/rewrap', {items}, {noMsg: true});
+}
+export function reportE2eeExposure(state) {
+	return http.post('/my/e2ee/exposure', {state}, {noMsg: true});
+}
+
 export function totpSetup(oldCode) {
 	return http.post('/my/totp/setup', {oldCode: oldCode || ''}, {noMsg: true});
 }
@@ -21,8 +32,8 @@ export function totpEnable(code) {
 	return http.post('/my/totp/enable', {code}, {noMsg: true});
 }
 
-export function totpDisable(password, code) {
-	return http.post('/my/totp/disable', {password, code}, {noMsg: true});
+export function totpDisable(loginKey, code) {
+	return http.post('/my/totp/disable', {loginKey, code}, {noMsg: true});
 }
 
 export function passkeyRegisterOptions() {
@@ -85,8 +96,8 @@ export function disableDeadman() {
 }
 
 // Phase 7：闲置锁定后解锁，只校验登录密码，不产生新会话。
-export function unlock(password) {
-	return http.post('/security/unlock', {password}, {noMsg: true});
+export function unlock(loginKey) {
+	return http.post('/security/unlock', {loginKey}, {noMsg: true});
 }
 
 // Phase 7：导出我的数据（JSON，不含邮件正文与任何密钥材料）。

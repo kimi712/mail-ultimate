@@ -168,6 +168,10 @@ const attService = {
 			attData.size = att.buff.length;
 			attData.filename = att.filename;
 			attData.mimeType = att.type;
+			// 白帽反馈修复（2026-11-12）：E2EE 附件的加密标记原样落库
+			// （前端已用信件密钥加密成 e2ee:v1: 信封、再包一层 base64 发来；
+			// 这里只存不透明字节，不碰内容）。老附件无此字段，恒为 NULL。
+			attData.encoding = typeof att.encoding === 'string' && att.encoding ? att.encoding : null;
 			attData.type = attConst.type.ATT;
 			attDataList.push(attData);
 		}

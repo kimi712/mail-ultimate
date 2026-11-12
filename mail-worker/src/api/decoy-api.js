@@ -11,50 +11,51 @@ import BizError from '../error/biz-error';
 import { t } from '../i18n/i18n';
 
 // 状态：是否已设胁迫密码（诱饵会话下恒返回未设置）。
+// legacy：存量仍是 v1 旧 hash，需用户在安全中心重设一次。
 app.get('/my/duress/status', async (c) => {
 	const userId = userContext.getUserId(c);
 	if (userContext.isDecoy(c)) {
-		return c.json(result.ok({ enabled: false }));
+		return c.json(result.ok({ enabled: false, legacy: false }));
 	}
 	const status = await decoyService.getStatus(c, userId);
-	return c.json(result.ok({ enabled: status.enabled === 1 }));
+	return c.json(result.ok({ enabled: status.enabled === 1, legacy: !!status.legacy }));
 });
 
-// 设置胁迫密码：{ password（主密码）, duressPassword }。
-// 内部验主密码、验第二密码≠主密码、播种诱饵邮件。
+// 设置胁迫密码：新口径 { mainLoginKey, decoyLoginKey }（浏览器已派生）；
+// 旧版缓存页面发 { password（主密码）, duressPassword }，服务端走明文兜底。
+// 内部验主密码、播种诱饵邮件。
 app.post('/my/duress/set', async (c) => {
 	const userId = userContext.getUserId(c);
 	if (userContext.isDecoy(c)) {
 		throw new BizError(t('unauthorized'), 403);
 	}
-	const { password, duressPassword } = await c.req.json().catch(() => ({}));
+	const { password, duressPassword, mainLoginKey, decoyLoginKey } = await c.req.json().catch(() => ({}));
 	const status = await decoyService.setSecondPassword(c, userId, {
-		password: duressPassword, currentPassword: password
+		decoyLoginKey, mainLoginKey, password: duressPassword, currentPassword: password
 	});
 	return c.json(result.ok({ enabled: status.enabled === 1 }));
 });
 
-// 改胁迫密码：{ password（主密码）, duressPassword（新） }。
-// 与设置同一入口（setSecondPassword 已存在时为覆盖更新）。
+// 改胁迫密码：与设置同一入口（setSecondPassword 已存在时为覆盖更新）。
 app.post('/my/duress/change', async (c) => {
 	const userId = userContext.getUserId(c);
 	if (userContext.isDecoy(c)) {
 		throw new BizError(t('unauthorized'), 403);
 	}
-	const { password, duressPassword } = await c.req.json().catch(() => ({}));
+	const { password, duressPassword, mainLoginKey, decoyLoginKey } = await c.req.json().catch(() => ({}));
 	const status = await decoyService.setSecondPassword(c, userId, {
-		password: duressPassword, currentPassword: password
+		decoyLoginKey, mainLoginKey, password: duressPassword, currentPassword: password
 	});
 	return c.json(result.ok({ enabled: status.enabled === 1 }));
 });
 
-// 关闭胁迫密码：{ password（主密码） }。
+// 关闭胁迫密码：新口径 { mainLoginKey }，旧版缓存页面发 { password（主密码） }。
 app.post('/my/duress/disable', async (c) => {
 	const userId = userContext.getUserId(c);
 	if (userContext.isDecoy(c)) {
 		throw new BizError(t('unauthorized'), 403);
 	}
-	const { password } = await c.req.json().catch(() => ({}));
-	const status = await decoyService.disable(c, userId, { password });
+	const { password, mainLoginKey } = await c.req.json().catch(() => ({}));
+	const status = await decoyService.disable(c, userId, { loginKey: mainLoginKey, password });
 	return c.json(result.ok({ enabled: status.enabled === 1 }));
 });

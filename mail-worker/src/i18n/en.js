@@ -3,6 +3,9 @@ import { burn4En } from './burn4.js'
 const en = {
 	...burn4En,
 	IncorrectPwd: 'Incorrect password',
+	// 2026-11-12 uwu step 1: new login-key errors.
+	invalidLoginKey: 'Invalid login key. Please refresh the page and try again.',
+	loginClientOutdated: 'Your client is outdated. Please refresh the page and log in again.',
 	hardDeleteConfirmMismatch: 'Confirmation text is incorrect, please type DELETE',
 	hardDeleteAdminBlocked: 'The admin account cannot be permanently deleted by self-service',
 	addAccountDisabled: 'Add Email Address feature is disabled',
@@ -41,6 +44,7 @@ const en = {
 	minEmailPrefix: 'Email must be at least {{msg}} characters',
 	banEmailPrefix: 'Invalid characters in email address',
 	pwdMinLength: 'Password must be at least 6 characters',
+	pwdTooWeak: 'Password too weak: use at least 8 characters, or mix upper/lower case, digits and symbols',
 	notEmailDomain: 'Invalid email domain',
 	emptyRegKey: 'Invite code cannot be empty',
 	notExistRegKey: 'Invite code does not exist',

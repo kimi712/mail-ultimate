@@ -31,6 +31,7 @@ import '../api/security-login-history-api'
 import '../api/security-audit-api'
 import '../api/security-unlock-api'
 import '../api/security-export-api'
+import '../api/e2ee-migrate-api'
 // 斯诺登第二批（v3_15DB）：死亡开关（仅限本人配置）。
 import '../api/deadman-api'
 // Phase 8：AI 助手与翻译（C）、邮件信任与控制（E）、
@@ -46,7 +47,6 @@ import '../api/alias-api'
 // 斯诺登第三批（v3_16DB）：胁迫密码 / 可搜索加密（盲索引）/ 零知识身份。
 import '../api/decoy-api'
 import '../api/blind-api'
-import '../api/zk-api'
 // $1000 安全悬赏挑战：公开状态页（无需登录）。
 import '../api/challenge-api'
 // 斯诺登第四批（v3_17DB）：管理员审计可见化 / 登录异常告警 / 阅后即焚加固 / 自动过期别名。

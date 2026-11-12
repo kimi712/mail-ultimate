@@ -117,12 +117,6 @@
           </el-input>
           <el-input v-model="form.password" :placeholder="$t('password')" type="password" autocomplete="off" @keyup.enter="submit">
           </el-input>
-          <!-- 斯诺登第三批（v3_16DB）：零知识登录——挑战-应答，服务端只存验证子；须先在安全中心开通。 -->
-          <div style="display: flex; align-items: center; gap: 6px; margin: 6px 0 2px;">
-            <el-tooltip effect="dark" :content="$t('zkLoginHint')" placement="top">
-              <el-checkbox v-model="zkLogin">{{ $t('zkLoginLabel') }}</el-checkbox>
-            </el-tooltip>
-          </div>
           <el-button class="btn" type="primary" @click="submit" :loading="loginLoading"
           >{{ $t('loginBtn') }}
           </el-button>
@@ -305,7 +299,9 @@ import {useI18n} from "vue-i18n";
 import {ElMessageBox} from "element-plus";
 import {oauthLinuxDoLogin, oauthGithubLogin, oauthGoogleLogin} from "@/request/ouath.js";
 import {reloadTurnstileScript} from "@/utils/turnstile-script.js";
-import {fetchZkChallenge, buildZkLoginField} from "@/utils/zklogin.js";
+import { deriveAuthKeys, fetchLoginSalt, deriveLoginKeyOnly, generateLoginSalt, setLoginSalt, passwordStrengthScore } from "@/utils/authkeys.js";
+import { probeE2eeState } from "@/utils/e2ee-migrate.js";
+import { getDuressStatus } from "@/request/snowden3.js";
 import IntroAnimation from "@/components/intro-animation/index.vue";
 
 const {t} = useI18n();
@@ -385,6 +381,14 @@ const authErrorMap = {
   // authErrLoginFailed：登录失败通用错误（Phase 8 H：不区分邮箱不存在/已注销/已禁用/密码错）
   '邮箱或密码不正确，请重试。': 'authErrLoginFailed',
   'Incorrect email or password. Please try again.': 'authErrLoginFailed',
+  // 2026-11-12 uwu 第 1 步：登录密钥机制的新错误（客户端太旧 / 登录密钥无效）
+  '客户端太旧，请刷新页面后重新登录': 'authErrLoginClientOutdated',
+  'Your client is outdated. Please refresh the page and log in again.': 'authErrLoginClientOutdated',
+  '登录密钥无效，请刷新页面重试': 'authErrInvalidLoginKey',
+  'Invalid login key. Please refresh the page and try again.': 'authErrInvalidLoginKey',
+  // pwdTooWeak：注册口令强度 0 分（服务端底线，见 login-service.js）
+  '密码太弱：请用至少 8 位，或混用大小写、数字、符号': 'pwdTooWeak',
+  'Password too weak: use at least 8 characters, or mix upper/lower case, digits and symbols': 'pwdTooWeak',
   // totpInvalidCode：TOTP 第二步验证码错误（可重试，totpToken 仍有效）
   '二次验证码错误，请重试': 'loginTotpInvalidCode',
   'Invalid verification code, please try again': 'loginTotpInvalidCode',
@@ -423,8 +427,51 @@ const totpCode = ref('')
 const totpLoading = ref(false)
 // TOTP 第二步错码常驻提示（面板内显示，输入新码/重试/回密码页时清空）。
 const totpError = ref('')
-// 斯诺登第三批（v3_16DB）：零知识登录开关（挑战-应答，须先在安全中心开通）。
-const zkLogin = ref(false)
+// 2026-11-12 uwu 第 1 步：登录密钥机制（密码不出浏览器）。本次登录派生的
+// 密钥放内存里，只到登录完成（TOTP 第二步也用它），随后交 saveToken 存盐 +
+// 跑 E2EE 探针；口令原文用完即清，不落库、不写 localStorage。
+// {salt, loginKey, mailKey, password}。
+const pendingAuthKeys = ref(null)
+
+// 登录成功后的后台检查（不阻断进站）：E2EE 探针（暴露/未迁移提示）+
+// 胁迫密码 legacy 提示（老胁迫行须在安全中心重设一次）。
+// 入口：saveToken(token, authKeys)，仅密码登录路径传 authKeys。
+async function afterLoginChecks(authKeys) {
+  if (!authKeys) return
+  try {
+    const probe = await probeE2eeState({ mailKey: authKeys.mailKey || null, password: authKeys.password || '' })
+    if (probe?.state === 1) {
+      ElMessage({
+        message: t('e2eeExposedWarn'),
+        type: 'warning',
+        duration: 8000,
+        plain: true,
+      })
+    } else if (probe?.state === 2) {
+      ElMessage({
+        message: t('e2eeNotMigratedWarn'),
+        type: 'warning',
+        duration: 8000,
+        plain: true,
+      })
+    }
+  } catch (e) {
+    // best-effort：探针失败不阻断登录
+  }
+  try {
+    const duress = await getDuressStatus()
+    if (duress && duress.legacy) {
+      ElMessage({
+        message: t('duressLegacyWarn'),
+        type: 'warning',
+        duration: 8000,
+        plain: true,
+      })
+    }
+  } catch (e) {
+    // best-effort
+  }
+}
 const bindLoading = ref(false)
 const oauthLoading = ref(false);
 const showBindForm = ref(false);
@@ -872,24 +919,25 @@ const submit = () => {
   loginLoading.value = true
   // 密码 trim：手机键盘常在末尾误加空格，注册与登录须用同一处理，否则注册成功却登不上。
   // noMsg：拦截器不弹后端原文，由下面 catch 统一弹映射后的人话
-  // 斯诺登第三批（v3_16DB）：零知识登录——先取挑战、算 response，再随登录请求发 zk 字段；
-  // 账号未开通时提示并停下（用普通登录进安全中心开通）。
+  // 2026-11-12 uwu 第 1 步：密码不出浏览器。先取盐 → 浏览器内 PBKDF2-600k +
+  // HKDF 一分二（登录密钥 + 邮件密钥）→ 只发登录密钥。老用户（version 1）
+  // 本次带一次明文密码做迁移桥，服务端验旧 hash 后即存新验证器。
   const passwordTrimmed = String(form.password || '').trim()
-  const doLogin = (zk) => {
-    const body = {email, password: passwordTrimmed}
-    if (zk) body.zk = zk
-    return http.post('/login', body, {noMsg: true})
-  }
   const loginPromise = (async () => {
-    if (!zkLogin.value) {
-      return doLogin(null)
+    pendingAuthKeys.value = null
+    const saltInfo = await fetchLoginSalt(email)
+    const authKeys = await deriveAuthKeys(passwordTrimmed, saltInfo.salt)
+    const body = { email, loginKey: authKeys.loginKey, pwdScore: passwordStrengthScore(passwordTrimmed) }
+    // 胁迫密码已开通时：同一口令再按胁迫盐派生一次，服务端先试主密钥、再试胁迫密钥。
+    if (saltInfo.decoySalt) {
+      body.decoyLoginKey = await deriveLoginKeyOnly(passwordTrimmed, saltInfo.decoySalt)
     }
-    const challenge = await fetchZkChallenge(email)
-    if (!challenge?.enabled) {
-      throw new Error('zkNotEnabled')
+    if (saltInfo.version === 1) {
+      // 老用户迁移桥：本次带一次明文密码，服务端验旧 hash 通过后即存新验证器。
+      body.password = passwordTrimmed
     }
-    const zk = await buildZkLoginField(challenge, passwordTrimmed)
-    return doLogin(zk)
+    pendingAuthKeys.value = { salt: saltInfo.salt, loginKey: authKeys.loginKey, mailKey: authKeys.mailKey, password: passwordTrimmed }
+    return http.post('/login', body, {noMsg: true})
   })()
   loginPromise.then(async data => {
     // TOTP 第二步：密码通过但账号开 TOTP 时后端不返 JWT，只返 totpToken；
@@ -903,16 +951,13 @@ const submit = () => {
       return
     }
     if (data && data.token) {
-      await saveToken(data.token)
+      await saveToken(data.token, pendingAuthKeys.value)
       return
     }
     // 防御：既无 token 又非 TOTP，不写 localStorage，直接报错。
     showAuthError(new Error(t('reqFailErrorMsg')))
   }).catch((e) => {
-    if (e?.message === 'zkNotEnabled') {
-      ElMessage({message: t('zkNotEnabled'), type: 'error', plain: true})
-      return
-    }
+    pendingAuthKeys.value = null
     showAuthError(e)
   }).finally(() => {
     loginLoading.value = false
@@ -938,7 +983,7 @@ function submitTotp() {
     totpCode.value = ''
     totpError.value = ''
     if (data && data.token) {
-      await saveToken(data.token)
+      await saveToken(data.token, pendingAuthKeys.value)
       return
     }
     resetTotpStep()
@@ -969,7 +1014,7 @@ function backToPassword() {
   resetTotpStep()
 }
 
-async function saveToken(token) {
+async function saveToken(token, authKeys) {
   // 防御：绝不把 undefined / 空串写进 localStorage（旧 bug：TOTP 用户
   // data.token 为 undefined，存成字符串 "undefined" 后处处 401）。
   if (!token || token === 'undefined') {
@@ -982,6 +1027,17 @@ async function saveToken(token) {
     return
   }
   localStorage.setItem('token', token)
+  // 2026-11-12 uwu 第 1 步：密码登录时把本次派生的盐存进内存（不写
+  // localStorage），供改密/自删等需重新派生登录密钥的流程用；随后后台跑
+  // E2EE 探针与胁迫 legacy 提示（不阻断进站）。口令原文用完即清。
+  const keys = authKeys || null
+  pendingAuthKeys.value = null
+  if (keys && keys.salt) {
+    setLoginSalt(keys.salt)
+  }
+  if (keys) {
+    afterLoginChecks(keys)
+  }
   refreshWebsiteConfig()
   // 登录提速：取用户信息与同步语言/壁纸偏好三者互不依赖，并行跑，
   // 不再一个等一个。语言/壁纸同步内部已 try/catch（失败返回 null），不会拖垮登录；
@@ -1024,7 +1080,7 @@ function refreshWebsiteConfig() {
 }
 
 
-function submitRegister() {
+async function submitRegister() {
 
   if (registerLoading.value) return
 
@@ -1036,8 +1092,6 @@ function submitRegister() {
     })
     return
   }
-
-  console.log(registerForm.email)
 
   if (getEmailName(registerForm.email).length < settingStore.settings.minEmailPrefix) {
     ElMessage({
@@ -1071,6 +1125,18 @@ function submitRegister() {
   if (registerForm.password.length < 6) {
     ElMessage({
       message: t('pwdLengthMsg'),
+      type: 'error',
+      plain: true,
+    })
+    return
+  }
+
+  // 与服务端注册底线同规则（服务端只剩上报的 pwdScore 可作底线，见
+  // login-service.js）：0 分口令（<8 位且单一大小写、无数字、无符号）
+  // 在提交前就拦住，别等服务端拒。
+  if (passwordStrengthScore(registerForm.password) < 1) {
+    ElMessage({
+      message: t('pwdTooWeak'),
       type: 'error',
       plain: true,
     })
@@ -1119,11 +1185,27 @@ function submitRegister() {
 
   registerLoading.value = true
 
+  // 2026-11-12 uwu 第 1 步：注册时浏览器生成盐、派生登录密钥 + 邮件密钥，
+  // 只发登录密钥 + 盐；密码原文不出浏览器。邮件密钥随 saveToken 解锁 E2EE。
+  const passwordTrimmed = String(registerForm.password || '').trim()
+  let registerAuthKeys = null
+  let registerSalt = ''
+  try {
+    registerSalt = generateLoginSalt()
+    registerAuthKeys = await deriveAuthKeys(passwordTrimmed, registerSalt)
+  } catch (e) {
+    registerLoading.value = false
+    showAuthError(new Error(t('reqFailErrorMsg')))
+    return
+  }
+
   const form = {
     email,
-    password: String(registerForm.password || '').trim(),
+    loginKey: registerAuthKeys.loginKey,
+    salt: registerSalt,
     token: verifyToken,
-    code: registerForm.code
+    code: registerForm.code,
+    pwdScore: passwordStrengthScore(passwordTrimmed)
   }
 
   // noMsg：拦截器不弹后端原文，由下面 catch 统一弹映射后的人话
@@ -1157,7 +1239,7 @@ function submitRegister() {
     // 无 token 或自动登录失败时回落到登录页（后端签发失败不阻断注册）。
     if (token) {
       try {
-        await saveToken(token)
+        await saveToken(token, { salt: registerSalt, loginKey: registerAuthKeys.loginKey, mailKey: registerAuthKeys.mailKey, password: passwordTrimmed })
       } catch (e) {
         console.error('注册后自动登录失败，回落到登录页:', e)
         show.value = 'login'

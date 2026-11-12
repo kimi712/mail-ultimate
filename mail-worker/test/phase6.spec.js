@@ -15,6 +15,7 @@ import fieldCrypto from '../src/utils/field-crypto';
 import reqUtils from '../src/utils/req-utils';
 import logRetentionService from '../src/service/log-retention-service';
 import passkeyService from '../src/service/passkey-service';
+import { registerNew, loginNew, deriveLoginKeyForTest } from './auth-helpers.js';
 
 const TEST_JWT_SECRET = 'phase1-local-test-only-not-a-real-secret';
 const ORIGIN = 'https://aevorynthtech.com';
@@ -53,15 +54,17 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 }
 
 async function register(email, ip, extra = {}) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123', ...extra }
-	});
+	return registerNew(api, email, { ip, extra });
 }
 
 async function login(email, ip, password = 'password123') {
-	return api('/login', { method: 'POST', ip, body: { email, password } });
+	return loginNew(api, email, { ip, password });
+}
+
+// step-12 验密端点的新口径：先取盐派生主登录密钥再发（v2 账号不再收明文口令）。
+async function loginKeyFor(email, password = 'password123') {
+	const res = await api(`/login/salt?email=${encodeURIComponent(email)}`, {});
+	return deriveLoginKeyForTest(password, res.json?.data?.salt || '');
 }
 
 async function makeUser(email) {
@@ -409,10 +412,10 @@ describe('TOTP', () => {
 		const setup = await api('/my/totp/setup', { method: 'POST', token: user.token, body: {} });
 		const code = await totpService.generateCode(setup.json.data.secret);
 		await api('/my/totp/enable', { method: 'POST', token: user.token, body: { code } });
-		const badPwd = await api('/my/totp/disable', { method: 'POST', token: user.token, body: { password: 'wrong-password', code } });
+		const badPwd = await api('/my/totp/disable', { method: 'POST', token: user.token, body: { loginKey: await loginKeyFor('p6-totp-disable@example.com', 'wrong-password'), code } });
 		expect(badPwd.json.code).not.toBe(200);
 		const code2 = await totpService.generateCode(setup.json.data.secret);
-		const ok = await api('/my/totp/disable', { method: 'POST', token: user.token, body: { password: 'password123', code: code2 } });
+		const ok = await api('/my/totp/disable', { method: 'POST', token: user.token, body: { loginKey: await loginKeyFor('p6-totp-disable@example.com'), code: code2 } });
 		expect(ok.json.code).toBe(200);
 		const loginRes = await login('p6-totp-disable@example.com', user.ip);
 		expect(loginRes.json.code).toBe(200);
@@ -653,7 +656,7 @@ describe('个性化安全中心', () => {
 		const user = await makeUser('p6-security@example.com');
 		const before = await api('/my/security', { token: user.token });
 		expect(before.json.code).toBe(200);
-		expect(before.json.data).toEqual({ loginAlert: 1, e2eeEnabled: 0, retentionDays: 0, e2eeSalt: '', totpEnabled: false, autoLockMinutes: 0, mlkemEnabled: 0 });
+		expect(before.json.data).toEqual({ loginAlert: 1, e2eeEnabled: 0, retentionDays: 0, e2eeSalt: '', totpEnabled: false, autoLockMinutes: 0, mlkemEnabled: 0, e2eeExposed: 0, hasPassword: true });
 		const set = await api('/my/security', { method: 'POST', token: user.token, body: { loginAlert: 0, retentionDays: 90, e2eeSalt: 'testsalt123' } });
 		expect(set.json.code).toBe(200);
 		const after = await api('/my/security', { token: user.token });

@@ -3,10 +3,20 @@
 //  - 胁迫密码：被胁迫时交出第二密码，登录后进入诱饵视图，看不到真实邮件；
 //  - 隐藏邮箱：主密码进真实邮箱，第二密码进诱饵邮箱（内容是播种的假邮件，
 //    看起来真实，不是空壳）。
-// 安全要点：
-//  - 第二密码 hash/salt 与主密码同一算法（SHA-256(salt+password) base64），
-//    但存在独立表、独立 salt；设置/关闭第二密码必须验证主密码（胁迫者只
-//    有第二密码时改不了它）；第二密码不得与主密码相同（否则无法区分）；
+// 安全要点（2026-11-12 uwu 第 1+3 步更新）：
+//  - 第二密码不再以明文发给服务端：浏览器用**胁迫盐**（本表 salt，
+//    主密码改密换盐不影响它）派生 decoyLoginKey，只发密钥；服务端存
+//    PBKDF2-210k(decoyLoginKey)（'pbkdf2$210000$lk$' 前缀，与主凭证同款）。
+//    胁迫口令推不出邮件密钥（与主口令不同串 → 不同 HKDF 输出）。
+//  - 设置/关闭第二密码必须验证主凭证（胁迫者只有第二密码时改不了它；
+//    校验走 userService.verifyLoginCredential，登录密钥口径）；
+//    “第二密码不得与主密码相同”改由浏览器在输入时比对（服务端再也见
+//    不到两个口令原文，无法代验；旧版缓存页面走服务端明文兜底时仍代验）。
+//  - v1 存量胁迫 hash（SHA-256(胁迫口令)）无法从 loginKey 反推：
+//    登录时若请求带了 password（老用户迁移桥或旧版缓存页面），验旧 hash
+//    通过后顺带把胁迫验证器迁到新口径；主凭证已迁、新客户端不再发 password
+//    时，老胁迫行须由用户在安全中心重设一次（状态接口返回 legacy: true
+//    供前端提示）。
 //  - 诱饵会话由 JWT payload.decoy=1 标识（验签防篡改），security.js 中间件
 //    置位 c.get('decoyMode')；诱饵会话不刷新 active_time（不取消死亡开关
 //    待执行）、不写登录日志、不发新 IP 提醒、不进会话列表；只记一条审计
@@ -118,40 +128,74 @@ const decoyService = {
 	async getStatus(c, userId) {
 		try {
 			const row = await orm(c).select().from(userDecoy).where(eq(userDecoy.userId, userId)).get();
-			if (!row) return { enabled: 0, seeded: 0 };
-			return { enabled: row.enabled === 1 ? 1 : 0, seeded: row.seeded === 1 ? 1 : 0 };
+			if (!row) return { enabled: 0, seeded: 0, legacy: false };
+			return {
+				enabled: row.enabled === 1 ? 1 : 0,
+				seeded: row.seeded === 1 ? 1 : 0,
+				// legacy：存量仍是 v1 旧 hash，需用户在安全中心重设一次
+				// （新客户端不再发胁迫口令明文，无法代迁）。
+				legacy: cryptoUtils.isLegacyHash(row.passwordHash)
+			};
 		} catch (e) {
-			return { enabled: 0, seeded: 0 };
+			return { enabled: 0, seeded: 0, legacy: false };
 		}
 	},
 
-	// 设置/修改第二密码：必须验证主密码；第二密码不得与主密码相同。
-	async setSecondPassword(c, userId, { password, currentPassword }) {
+	// 供取盐接口读胁迫盐（登录前派生 decoyLoginKey 用）。
+	async getRow(c, userId) {
+		try {
+			return await orm(c).select().from(userDecoy).where(eq(userDecoy.userId, userId)).get();
+		} catch (e) {
+			return null;
+		}
+	},
+
+	// 设置/修改第二密码：必须验证主凭证。
+	// 新口径入参 { decoyLoginKey, mainLoginKey }（浏览器已派生）；
+	// 旧版缓存页面入参 { password（胁迫口令）, currentPassword（主口令） }，
+	// 服务端自算两个 loginKey（迁移桥）。“第二密码≠主密码”由浏览器在
+	// 输入时比对；服务端只在拿到明文的旧口径路径上代验。
+	async setSecondPassword(c, userId, { decoyLoginKey, mainLoginKey, password, currentPassword }) {
+		let decoyLk = String(decoyLoginKey || '').trim();
+		let mainLk = String(mainLoginKey || '').trim();
 		const second = String(password || '').trim();
 		const current = String(currentPassword || '').trim();
-		if (second.length < MIN_SECOND_PASSWORD_LEN || second.length > MAX_SECOND_PASSWORD_LEN) {
+		if (!decoyLk && !second) {
 			throw new BizError(t('decoyPasswordLength'), 400);
 		}
-		if (!current) {
+		if (second && (second.length < MIN_SECOND_PASSWORD_LEN || second.length > MAX_SECOND_PASSWORD_LEN)) {
+			throw new BizError(t('decoyPasswordLength'), 400);
+		}
+		if (!mainLk && !current) {
 			throw new BizError(t('decoyNeedMainPassword'), 400);
 		}
 		const userRow = await userService.selectById(c, userId);
-		if (!userRow || !await cryptoUtils.verifyPassword(current, userRow.salt, userRow.password)) {
+		if (!userRow) {
 			throw new BizError(t('decoyMainPasswordWrong'), 400);
 		}
-		if (await cryptoUtils.verifyPassword(second, userRow.salt, userRow.password)) {
-			throw new BizError(t('decoySameAsMain'), 400);
+		// 主凭证校验（新口径验 loginKey；v1 旧行验口令并顺带迁移主凭证）。
+		const cred = await userService.verifyLoginCredential(c, userRow, { loginKey: mainLk, password: current });
+		if (!cred.ok) {
+			throw new BizError(cred.reason === 'client-outdated' ? t('loginClientOutdated') : t('decoyMainPasswordWrong'), 400);
 		}
-		const { salt, hash } = await cryptoUtils.hashPassword(second);
+		// 旧口径路径：服务端自算胁迫登录密钥；同时代验“第二密码≠主密码”。
+		let decoySalt = cryptoUtils.generateSalt();
+		if (!decoyLk) {
+			if (second === current) {
+				throw new BizError(t('decoySameAsMain'), 400);
+			}
+			decoyLk = await cryptoUtils.deriveLoginKeyOnly(second, decoySalt);
+		}
+		const hash = await cryptoUtils.hashLoginKey(decoyLk, decoySalt);
 		const row = await orm(c).select().from(userDecoy).where(eq(userDecoy.userId, userId)).get();
 		const now = new Date().toISOString();
 		if (row) {
 			await orm(c).update(userDecoy).set({
-				passwordHash: hash, salt, enabled: 1, updateTime: now
+				passwordHash: hash, salt: decoySalt, enabled: 1, updateTime: now
 			}).where(eq(userDecoy.userId, userId)).run();
 		} else {
 			await orm(c).insert(userDecoy).values({
-				userId, passwordHash: hash, salt, enabled: 1, seeded: 0, createTime: now, updateTime: now
+				userId, passwordHash: hash, salt: decoySalt, enabled: 1, seeded: 0, createTime: now, updateTime: now
 			}).run();
 		}
 		await this.seedDecoyMail(c, userId);
@@ -163,15 +207,20 @@ const decoyService = {
 		return this.getStatus(c, userId);
 	},
 
-	// 关闭第二密码：必须验证主密码；关闭后第二密码立即失效。
-	async disable(c, userId, { password }) {
+	// 关闭第二密码：必须验证主凭证（登录密钥口径；v1 旧行验口令并顺带迁移主凭证）。
+	async disable(c, userId, { loginKey, password }) {
+		const lk = String(loginKey || '').trim();
 		const current = String(password || '').trim();
-		if (!current) {
+		if (!lk && !current) {
 			throw new BizError(t('decoyNeedMainPassword'), 400);
 		}
 		const userRow = await userService.selectById(c, userId);
-		if (!userRow || !await cryptoUtils.verifyPassword(current, userRow.salt, userRow.password)) {
+		if (!userRow) {
 			throw new BizError(t('decoyMainPasswordWrong'), 400);
+		}
+		const cred = await userService.verifyLoginCredential(c, userRow, { loginKey: lk, password: current });
+		if (!cred.ok) {
+			throw new BizError(cred.reason === 'client-outdated' ? t('loginClientOutdated') : t('decoyMainPasswordWrong'), 400);
 		}
 		const row = await orm(c).select().from(userDecoy).where(eq(userDecoy.userId, userId)).get();
 		if (row) {
@@ -186,12 +235,46 @@ const decoyService = {
 		return this.getStatus(c, userId);
 	},
 
-	// 登录时校验第二密码（仅 enabled=1 时有效）。返回 true 表示这是诱饵登录。
-	async verifySecondPassword(c, userId, password) {
+	// 登录时校验胁迫登录密钥（新口径）。v1 旧 hash 行直接返回 false
+	// （loginKey 验不了旧 hash，调用方改走 verifySecondPassword 迁移桥）。
+	async verifySecondLoginKey(c, userId, decoyLoginKey) {
 		try {
+			const lk = String(decoyLoginKey || '').trim();
+			if (!lk) return false;
 			const row = await orm(c).select().from(userDecoy).where(eq(userDecoy.userId, userId)).get();
 			if (!row || row.enabled !== 1 || !row.passwordHash || !row.salt) return false;
-			return await cryptoUtils.verifyPassword(String(password || '').trim(), row.salt, row.passwordHash);
+			if (cryptoUtils.isLegacyHash(row.passwordHash)) return false;
+			return await cryptoUtils.verifyLoginKey(lk, row.salt, row.passwordHash);
+		} catch (e) {
+			return false;
+		}
+	},
+
+	// 登录时校验第二密码（仅 enabled=1 时有效）。v1 旧行：验旧 SHA-256 hash，
+	// 通过后把胁迫验证器迁到新口径（优先用浏览器发的 decoyLoginKey，否则
+	// 服务端用同盐自算；盐是胁迫盐，独立稳定，不用换）。迁移失败不阻断登录。
+	// 已迁移的行（新前缀）直接返回 false（口令验不了新 hash，调用方应走
+	// verifySecondLoginKey）。返回 true 表示这是诱饵登录。
+	async verifySecondPassword(c, userId, password, decoyLoginKey) {
+		try {
+			const pwd = String(password || '').trim();
+			if (!pwd) return false;
+			const row = await orm(c).select().from(userDecoy).where(eq(userDecoy.userId, userId)).get();
+			if (!row || row.enabled !== 1 || !row.passwordHash || !row.salt) return false;
+			if (!cryptoUtils.isLegacyHash(row.passwordHash)) return false;
+			if (!await cryptoUtils.verifyLegacyPassword(pwd, row.salt, row.passwordHash)) return false;
+			try {
+				let lk = String(decoyLoginKey || '').trim();
+				if (!lk) {
+					lk = await cryptoUtils.deriveLoginKeyOnly(pwd, row.salt);
+				}
+				const hash = await cryptoUtils.hashLoginKey(lk, row.salt);
+				await orm(c).update(userDecoy).set({ passwordHash: hash, updateTime: new Date().toISOString() })
+					.where(eq(userDecoy.userId, userId)).run();
+			} catch (e) {
+				console.error('胁迫验证器 v1→新口径迁移失败（不阻断登录）:', e.message);
+			}
+			return true;
 		} catch (e) {
 			return false;
 		}

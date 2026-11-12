@@ -211,11 +211,16 @@ const totpService = {
 		return { backupCodes };
 	},
 
-	// 关闭：需密码 + 当前 TOTP 码（或备份码）。成功后整行删除。
-	async disable(c, userId, password, code) {
+	// 关闭：需登录密钥（新口径，浏览器已派生）+ 当前 TOTP 码（或备份码）。
+	// 旧版缓存页面发明文密码，走迁移桥。成功后整行删除。
+	async disable(c, userId, { loginKey, password, code }) {
 		const userRow = await userService.selectById(c, userId);
-		if (!userRow || !await cryptoUtils.verifyPassword(password, userRow.salt, userRow.password)) {
+		if (!userRow) {
 			throw new BizError(t('IncorrectPwd'), 400);
+		}
+		const cred = await userService.verifyLoginCredential(c, userRow, { loginKey, password });
+		if (!cred.ok) {
+			throw new BizError(cred.reason === 'client-outdated' ? t('loginClientOutdated') : t('IncorrectPwd'), 400);
 		}
 		const row = await this.getRow(c, userId);
 		if (!row || row.enabled !== 1) {

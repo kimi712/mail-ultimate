@@ -23,7 +23,7 @@ const MAX_MLKEM_PRIV_ENC_LEN = 8192;
 
 const ALLOWED_RETENTION_DAYS = [0, 30, 90, 365];
 const ALLOWED_AUTO_LOCK_MINUTES = [0, 5, 15, 30];
-const DEFAULTS = { loginAlert: 1, e2eeEnabled: 0, retentionDays: 0, e2eeSalt: '', autoLockMinutes: 0 };
+const DEFAULTS = { loginAlert: 1, e2eeEnabled: 0, retentionDays: 0, e2eeSalt: '', autoLockMinutes: 0, e2eeExposed: 0, hasPassword: false };
 
 // Phase 8 B · 安全评分规则（总分 100，见 getScore；前端展示分项得分与改进建议）。
 // 旧口径（TOTP 30 + Passkey 30 + 登录提醒 20 + 30 天无新 IP 20，只看最近 20 条
@@ -89,7 +89,21 @@ const userSecurityService = {
 			} catch (e) {
 				totpEnabled = false;
 			}
-			return { ...base, totpEnabled, mlkemEnabled: base.mlkemEnabled ?? 0 };
+			// 2026-11-12 uwu 第 2 步：E2EE 暴露状态（user.e2ee_exposed 列；
+			// 0=正常/已统一，1=已暴露，2=老模型未迁移）。读不到按 0。
+			let e2eeExposed = 0;
+			let hasPassword = false;
+			try {
+				const userRow = await userService.selectById(c, userId);
+				e2eeExposed = Number(userRow?.e2eeExposed || 0);
+				// 有无登录密码：OAuth 用户无口令，开启 E2EE 前须先到设置页设密码
+				// （邮件密钥由登录密码派生，无口令派不出可重建的密钥）。
+				hasPassword = !!userRow?.password;
+			} catch (e) {
+				e2eeExposed = 0;
+				hasPassword = false;
+			}
+			return { ...base, totpEnabled, mlkemEnabled: base.mlkemEnabled ?? 0, e2eeExposed, hasPassword };
 		} catch (e) {
 			return { ...DEFAULTS, totpEnabled: false, mlkemEnabled: 0 };
 		}

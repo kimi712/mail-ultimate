@@ -9,6 +9,7 @@ import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
 import regKeyService from '../src/service/reg-key-service';
 import loginLogService from '../src/service/login-log-service';
+import { registerNew, loginNew } from './auth-helpers.js';
 
 const TEST_JWT_SECRET = 'phase1-local-test-only-not-a-real-secret';
 const IP_A = '203.0.113.21';
@@ -42,15 +43,11 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 }
 
 async function register(email, ip, extra = {}) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123', ...extra }
-	});
+	return registerNew(api, email, { ip, extra });
 }
 
 async function login(email, ip, password = 'password123') {
-	return api('/login', { method: 'POST', ip, body: { email, password } });
+	return loginNew(api, email, { ip, password });
 }
 
 const SETTING_COLUMN_MAP = {
@@ -286,11 +283,8 @@ describe('登录日志与异地提醒（A 路）', () => {
 		const sentBefore = await env.db.prepare(
 			`SELECT COUNT(*) AS n FROM email WHERE user_id = ? AND type = 1`
 		).bind(userRow.user_id).first();
-		// 不带 IP 请求头登录：curIp 为 'Unknown'
-		const res = await api('/login', {
-			method: 'POST',
-			body: { email: 'p2a-unknown@example.com', password: 'password123' }
-		});
+		// 不带 IP 请求头登录：curIp 为 'Unknown'（loginNew 两次请求都不带 IP 头）
+		const res = await loginNew(api, 'p2a-unknown@example.com', {});
 		expect(res.json.code).toBe(200);
 		const row = await env.db.prepare(
 			`SELECT ip, is_new_ip FROM login_log WHERE user_id = ? ORDER BY log_id DESC LIMIT 1`

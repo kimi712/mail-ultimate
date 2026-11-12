@@ -12,7 +12,9 @@ import orm from '../entity/orm';
 import emailBlindIndex from '../entity/email-blind-index';
 import { eq, and, sql } from 'drizzle-orm';
 
-const MAX_TOKENS_PER_MAIL = 50;
+// 单封信 token 上限：真实关键词上限 50 + 假 token 填充 16（2026-11-12 白帽反馈修复），
+// 服务端不区分真假、只按上限截断；假 token 由客户端生成，搜索只查真实 token。
+const MAX_TOKENS_PER_MAIL = 70;
 const MAX_TOKEN_LEN = 128;
 
 const blindIndexService = {

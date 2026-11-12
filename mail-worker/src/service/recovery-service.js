@@ -119,13 +119,15 @@ const recoveryService = {
 
 	// 生成一组新恢复码（需先验当前密码；旧码全部作废）。
 	// 返回明文码（仅此一次）；调用方必须当场展示、不得存日志、不得再次返回。
-	async generateCodes(c, userId, password) {
+	// 新口径验登录密钥（浏览器已派生），旧版缓存页面发明文密码走迁移桥。
+	async generateCodes(c, userId, { loginKey, password } = {}) {
 		const userRow = await userService.selectById(c, userId);
 		if (!userRow) {
 			throw new BizError(t('recoveryUserNotFound'), 404);
 		}
-		if (!password || !await cryptoUtils.verifyPassword(password, userRow.salt, userRow.password)) {
-			throw new BizError(t('recoveryWrongPassword'), 400);
+		const cred = await userService.verifyLoginCredential(c, userRow, { loginKey, password });
+		if (!cred.ok) {
+			throw new BizError(cred.reason === 'client-outdated' ? t('loginClientOutdated') : t('recoveryWrongPassword'), 400);
 		}
 		return this._issueCodes(c, userId);
 	},

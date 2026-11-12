@@ -3,6 +3,9 @@ import { burn4Zh } from './burn4.js'
 const zh = {
 	...burn4Zh,
 	IncorrectPwd: '密码输入错误',
+	// 2026-11-12 uwu 第 1 步：登录密钥机制的新错误。
+	invalidLoginKey: '登录密钥无效，请刷新页面重试',
+	loginClientOutdated: '客户端太旧，请刷新页面后重新登录',
 	hardDeleteConfirmMismatch: '确认文字不正确，请输入 DELETE',
 	hardDeleteAdminBlocked: '管理员账号不能自助彻底删除',
 	addAccountDisabled: '添加邮箱功能已关闭',
@@ -41,6 +44,7 @@ const zh = {
 	minEmailPrefix: '邮箱名至少{{msg}}位',
 	banEmailPrefix: '邮箱名包含非法字符',
 	pwdMinLength: '密码至少六位',
+	pwdTooWeak: '密码太弱：请用至少 8 位，或混用大小写、数字、符号',
 	notEmailDomain: '非法邮箱域名',
 	emptyRegKey: '注册码不能为空',
 	notExistRegKey: '注册码不存在',

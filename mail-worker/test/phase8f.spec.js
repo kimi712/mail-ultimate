@@ -30,6 +30,7 @@ import mailRuleService from '../src/service/mail-rule-service';
 import privacyService from '../src/service/privacy-service';
 import { evaluatePasswordStrength } from '../src/utils/password-strength';
 import { evaluatePasswordStrength as evaluatePasswordStrengthVue } from '../../mail-vue/src/utils/password-strength.js';
+import { registerNew, loginNew, deriveLoginKeyForTest } from './auth-helpers.js';
 
 const TEST_JWT_SECRET = 'phase1-local-test-only-not-a-real-secret';
 let ipCounter = 500;
@@ -67,15 +68,18 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 }
 
 async function register(email, ip, extra = {}) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123', ...extra }
-	});
+	return registerNew(api, email, { ip, extra });
 }
 
 async function login(email, ip, password = 'password123') {
-	return api('/login', { method: 'POST', ip, body: { email, password } });
+	return loginNew(api, email, { ip, password });
+}
+
+// 服务层直接验登录密钥：从库里读当前盐，用当前口令派生（generateCodes
+// 已改为 {loginKey, password} 口径，服务层收不到口令原文时须传登录密钥）。
+async function loginKeyFor(userId, password) {
+	const row = await env.db.prepare(`SELECT salt FROM user WHERE user_id = ?`).bind(userId).first();
+	return deriveLoginKeyForTest(password, row.salt);
 }
 
 async function makeUser(email) {
@@ -209,7 +213,7 @@ describe('新表', () => {
 
 describe('恢复码：只显示一次且 hash 存库', () => {
 	it('生成 10 个码（库里只有 hash，明文不在库里）→ 凭码重设密码成功：码作废、旧密码失效、新密码能登录', async () => {
-		const { codes, count } = await recoveryService.generateCodes(serviceCtx(), alice.userId, 'password123');
+		const { codes, count } = await recoveryService.generateCodes(serviceCtx(), alice.userId, { loginKey: await loginKeyFor(alice.userId, 'password123') });
 		expect(count).toBe(10);
 		expect(new Set(codes).size).toBe(10);
 		expect(codes[0]).toMatch(/^[A-Z2-9]{4}-[A-Z2-9]{4}-[A-Z2-9]{4}$/);
@@ -256,8 +260,8 @@ describe('恢复码：只显示一次且 hash 存库', () => {
 	});
 
 	it('重新生成作废旧码：旧码失效，新码可用', async () => {
-		const { codes: oldCodes } = await recoveryService.generateCodes(serviceCtx(), alice.userId, 'password123');
-		const { codes } = await recoveryService.generateCodes(serviceCtx(), alice.userId, 'password123');
+		const { codes: oldCodes } = await recoveryService.generateCodes(serviceCtx(), alice.userId, { loginKey: await loginKeyFor(alice.userId, 'password123') });
+		const { codes } = await recoveryService.generateCodes(serviceCtx(), alice.userId, { loginKey: await loginKeyFor(alice.userId, 'password123') });
 		expect(codes.length).toBe(10);
 		expect(await recoveryService.remainingCodes(serviceCtx(), alice.userId)).toBe(10);
 		await expect(recoveryService.resetByCode(serviceCtx(), {
@@ -270,7 +274,7 @@ describe('恢复码：只显示一次且 hash 存库', () => {
 	});
 
 	it('弱新密码被拦住（强度计联动）', async () => {
-		const { codes } = await recoveryService.generateCodes(serviceCtx(), alice.userId, 'password123');
+		const { codes } = await recoveryService.generateCodes(serviceCtx(), alice.userId, { loginKey: await loginKeyFor(alice.userId, 'password123') });
 		await expect(recoveryService.resetByCode(serviceCtx(), {
 			email: alice.email, code: codes[0], newPassword: '123456', ip: nextIp()
 		})).rejects.toMatchObject({ code: 400 });
@@ -589,7 +593,7 @@ describe('邮件规则：按顺序执行且只对新信生效', () => {
 describe('隐私仪表盘', () => {
 	it('数据清单：登录位置与正文日志明确为“不收集”，保留期限与开关状态齐全', async () => {
 		const user = await makeUser('p8f-leo@example.com');
-		await recoveryService.generateCodes(serviceCtx(), user.userId, 'password123');
+		await recoveryService.generateCodes(serviceCtx(), user.userId, { loginKey: await loginKeyFor(user.userId, 'password123') });
 		await contactService.add(serviceCtx(), user.userId, { name: 'Mia', email: 'mia@example.com' });
 		await mailRuleService.create(serviceCtx(), user.userId, {
 			name: 'R', condition: { subject_contains: 'x' }, actions: [{ type: 'mark_read' }]
@@ -617,7 +621,7 @@ describe('HTTP 层（已注册路由）', () => {
 	it('GET /privacy/dashboard：登录态可查，只返回本人数据；未登录不返回 200', async () => {
 		// 用 beforeAll 的 alice 原始 token（全程有效）；恢复码在本测内生成。
 		const gen = await api('/my/recovery-codes/generate', {
-			method: 'POST', token: alice.token, body: { password: 'password123' }
+			method: 'POST', token: alice.token, body: { loginKey: await loginKeyFor(alice.userId, 'password123') }
 		});
 		expect(gen.json.code).toBe(200);
 		expect(gen.json.data.codes.length).toBe(10);

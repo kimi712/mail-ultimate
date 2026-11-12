@@ -11,6 +11,7 @@
 // 只有 beforeAll 的状态持久；每个 it 必须单测内自包含。
 import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
+import { registerNew, loginNew } from './auth-helpers.js';
 
 const TEST_JWT_SECRET = env.jwt_secret;
 // 注意：旧 spec 文件里写死的 'test-jwt-secret' 调 /init 会返回
@@ -44,9 +45,9 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 
 async function makeUser(email) {
 	const ip = nextIp();
-	const reg = await api('/register', { method: 'POST', ip, body: { email, password: 'password123' } });
+	const reg = await registerNew(api, email, { ip });
 	expect(reg.json.code).toBe(200);
-	const loginRes = await api('/login', { method: 'POST', ip, body: { email, password: 'password123' } });
+	const loginRes = await loginNew(api, email, { ip });
 	expect(loginRes.json.code).toBe(200);
 	const row = await env.db.prepare('SELECT user_id FROM user WHERE email = ?').bind(email).first();
 	return { token: loginRes.json.data.token, userId: row.user_id, email };

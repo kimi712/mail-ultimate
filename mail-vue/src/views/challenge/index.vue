@@ -23,6 +23,9 @@
       </div>
       <div class="deadline-line">{{ t('deadline') }}：2026-11-18 23:59 (UTC+8)</div>
 
+      <!-- 暂停横幅（uwu 第 5 步）：修复期间挑战暂停，只显示横幅、不接受提交 -->
+      <div v-if="status.paused" class="warn-box">{{ t('paused') }}</div>
+
       <!-- 存在证明 -->
       <el-divider>{{ t('proofTitle') }}</el-divider>
       <div v-if="loading" class="desc">{{ t('loading') }}</div>
@@ -69,7 +72,8 @@
 
       <!-- 尝试计数表单：只计数 + 回执，不是裁决通道 -->
       <el-divider>{{ t('formTitle') }}</el-divider>
-      <div class="warn-box">{{ t('formDisclaimer') }}</div>
+      <div v-if="status.paused" class="warn-box">{{ t('paused') }}</div>
+      <div v-else class="warn-box">{{ t('formDisclaimer') }}</div>
       <el-form label-position="top" @submit.prevent>
         <el-form-item :label="t('formPhrase')">
           <el-input v-model="form.phrase" :placeholder="t('formPhrasePh')" autocomplete="off" />
@@ -127,9 +131,10 @@ const TEXTS = {
     rulesTitle: '规则摘要',
     rule1: '奖金 $1000，截止 2026-11-18 23:59（北京时间）。',
     rule2: '光报出暗号不算赢，必须讲清完整的破解路径。',
-    rule3: '挑战信是真正的端到端加密邮件（浏览器 AES-GCM-256 + 抗量子 ML-KEM-768），服务器只存密文。',
+    rule3: '挑战信是真正的端到端加密邮件（浏览器 AES-GCM-256 + 抗量子 ML-KEM-768），正文与附件在浏览器内加密后再上传，服务器只存密文；标题、收发件人等元数据仍为明文。',
     rule4: '本页的提交只是计数 + 回执，正式裁决提交渠道以悬赏帖为准。',
     rule5: '暗号原文与破解方法原文不会被保存，只保存 SHA-256 哈希。',
+    paused: '挑战已暂停：正在修复白帽安全研究员指出的问题，修复上线并复核通过后恢复。',
     formTitle: '记录一次尝试',
     formDisclaimer: '这里不是交答案的地方：提交只做计数并发回执，裁决与领奖请按悬赏帖里的渠道。不要在这里贴出你认为的完整答案以外的敏感信息。',
     formPhrase: '你读到的暗号',
@@ -163,9 +168,10 @@ const TEXTS = {
     rulesTitle: 'Rules in brief',
     rule1: 'Prize: $1,000. Deadline: 2026-11-18 23:59 (UTC+8).',
     rule2: 'Reporting the passphrase alone does not win — you must explain the full attack path.',
-    rule3: 'The challenge email is genuinely end-to-end encrypted (browser AES-GCM-256 + post-quantum ML-KEM-768). The server only stores ciphertext.',
+    rule3: 'The challenge email is genuinely end-to-end encrypted (browser AES-GCM-256 + post-quantum ML-KEM-768). Its body and attachments are encrypted in the browser before upload; the server only stores ciphertext. Subject, sender, and recipient metadata remain plaintext.',
     rule4: 'Submitting here only counts the attempt and returns a receipt. The official submission channel for adjudication is the one in the bounty post.',
     rule5: 'Your passphrase and method are never stored as text — only their SHA-256 hashes.',
+    paused: 'Challenge paused: we are fixing issues reported by a white-hat security researcher. It will resume after the fixes are live and verified.',
     formTitle: 'Record an attempt',
     formDisclaimer: 'This is not where you submit your answer for adjudication: submissions here are only counted and receipted. For the verdict and the prize, use the channel in the bounty post.',
     formPhrase: 'The passphrase you read',
@@ -188,12 +194,12 @@ const router = useRouter()
 const loading = ref(true)
 const loadError = ref(false)
 const submitting = ref(false)
-const status = ref({ exists: false, subject: null, sentAt: null, ciphertextSha256: null, attempts: { count: 0, lastSubmittedAt: null } })
+const status = ref({ exists: false, paused: false, subject: null, sentAt: null, ciphertextSha256: null, attempts: { count: 0, lastSubmittedAt: null } })
 const form = reactive({ phrase: '', method: '' })
 const receipt = ref('')
 const now = ref(Date.now())
 
-const canSubmit = computed(() => !!form.phrase.trim() && !!form.method.trim())
+const canSubmit = computed(() => !status.value.paused && !!form.phrase.trim() && !!form.method.trim())
 
 const countdown = computed(() => {
   const diff = DEADLINE_MS - now.value
@@ -222,6 +228,7 @@ async function loadStatus() {
 }
 
 async function onSubmit() {
+  if (status.value.paused) return
   submitting.value = true
   try {
     const data = await submitChallengeAttempt(form.phrase.trim(), form.method.trim())

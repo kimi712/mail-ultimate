@@ -7,6 +7,7 @@
 // 运行：mail-worker 下 npx vitest run test/phase7-harddelete.spec.js。
 import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
+import { registerNew, loginNew, deriveLoginKeyForTest } from './auth-helpers.js';
 
 const TEST_JWT_SECRET = 'phase1-local-test-only-not-a-real-secret';
 let ipCounter = 400;
@@ -37,15 +38,16 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 }
 
 async function register(email, ip, extra = {}) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123', ...extra }
-	});
+	return registerNew(api, email, { ip, extra });
 }
 
 async function login(email, ip, password = 'password123') {
-	return api('/login', { method: 'POST', ip, body: { email, password } });
+	return loginNew(api, email, { ip, password });
+}
+// step-12 验密端点的新口径：先取盐派生主登录密钥再发（v2 账号不再收明文口令）。
+async function loginKeyFor(email, password = 'password123') {
+	const res = await api(`/login/salt?email=${encodeURIComponent(email)}`, {});
+	return deriveLoginKeyForTest(password, res.json?.data?.salt || '');
 }
 
 async function makeUser(email) {
@@ -132,7 +134,7 @@ describe('自助彻底删除 POST /my/hard-delete', () => {
 		const user = await makeUser('hd-wrongpwd@example.com');
 		const res = await api('/my/hard-delete', {
 			method: 'POST', token: user.token,
-			body: { password: 'wrong-password', confirmText: 'DELETE' }
+			body: { loginKey: await loginKeyFor('hd-wrongpwd@example.com', 'wrong-password'), confirmText: 'DELETE' }
 		});
 		expect(res.json.code).not.toBe(200);
 		const still = await env.db.prepare(
@@ -147,7 +149,7 @@ describe('自助彻底删除 POST /my/hard-delete', () => {
 		const user = await makeUser('hd-wrongtext@example.com');
 		const res = await api('/my/hard-delete', {
 			method: 'POST', token: user.token,
-			body: { password: 'password123', confirmText: 'delete' }
+			body: { loginKey: await loginKeyFor('hd-wrongtext@example.com'), confirmText: 'delete' }
 		});
 		expect(res.json.code).not.toBe(200);
 		const still = await env.db.prepare(
@@ -162,7 +164,7 @@ describe('自助彻底删除 POST /my/hard-delete', () => {
 		expect(await countWhere('login_log', 'user_id = ?', user.userId)).toBeGreaterThan(0);
 		const res = await api('/my/hard-delete', {
 			method: 'POST', token: user.token,
-			body: { password: 'password123', confirmText: 'DELETE' }
+			body: { loginKey: await loginKeyFor('hd-ok@example.com'), confirmText: 'DELETE' }
 		});
 		expect(res.json.code).toBe(200);
 		for (const [table, where] of [
@@ -200,7 +202,7 @@ describe('自助彻底删除 POST /my/hard-delete', () => {
 		await seedUserData(other);
 		const res = await api('/my/hard-delete', {
 			method: 'POST', token: victim.token,
-			body: { password: 'password123', confirmText: 'DELETE' }
+			body: { loginKey: await loginKeyFor('hd-victim@example.com'), confirmText: 'DELETE' }
 		});
 		expect(res.json.code).toBe(200);
 		expect(await countWhere('user', 'user_id = ?', other.userId)).toBe(1);
@@ -226,7 +228,7 @@ describe('自助彻底删除 POST /my/hard-delete', () => {
 		expect(await env.kv.get(key)).not.toBeNull();
 		const res = await api('/my/hard-delete', {
 			method: 'POST', token: user.token,
-			body: { password: 'password123', confirmText: 'DELETE' }
+			body: { loginKey: await loginKeyFor('hd-wallpaper@example.com'), confirmText: 'DELETE' }
 		});
 		expect(res.json.code).toBe(200);
 		expect(await env.kv.get(key)).toBeNull();
@@ -238,7 +240,7 @@ describe('自助彻底删除 POST /my/hard-delete', () => {
 		const admin = await makeUser('admin@example.com');
 		const res = await api('/my/hard-delete', {
 			method: 'POST', token: admin.token,
-			body: { password: 'password123', confirmText: 'DELETE' }
+			body: { loginKey: await loginKeyFor('admin@example.com'), confirmText: 'DELETE' }
 		});
 		expect(res.json.code).not.toBe(200);
 		const still = await env.db.prepare(

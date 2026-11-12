@@ -304,6 +304,10 @@
 <script setup>
 import {reactive, ref, computed, defineOptions, onMounted} from 'vue'
 import {resetPassword, userDelete, loginLog, setLocale, getTelegramStatus, createTelegramBindCode, unbindTelegram, getAliasList, createAlias, disableAlias, enableAlias, deleteAlias} from "@/request/my.js";
+import { deriveAuthKeys, generateLoginSalt, setLoginSalt, deriveMainLoginKey } from "@/utils/authkeys.js";
+import { getMemoryKey, setMemoryKey } from "@/utils/e2ee.js";
+import { rewrapAll } from "@/utils/e2ee-migrate.js";
+import { reportE2eeExposure } from "@/request/security.js";
 import i18n from "@/i18n/index.js";
 import { SUPPORTED_LOCALES, SHORT_CODES, applyLocale, toStoredLocale } from "@/i18n/locale.js";
 import { loadPrefs, savePrefs, applyPrefs } from "@/utils/preferences.js";
@@ -683,16 +687,20 @@ function onRemoveBackupEmail() {
   })
 }
 
-function onGenerateCodes() {
+async function onGenerateCodes() {
   if (recoveryLoading.value) return
   recoveryLoading.value = true
-  generateRecoveryCodes(recoveryPassword.value).then(data => {
+  try {
+    // 2026-11-12 uwu 第 1 步：主密码不出浏览器，先派生登录密钥再发。
+    const email = userStore.user?.email || userStore.user?.account?.email || ''
+    const loginKey = await deriveMainLoginKey(String(recoveryPassword.value || '').trim(), email)
+    const data = await generateRecoveryCodes(loginKey)
     generatedCodes.value = data?.codes || data?.data?.codes || []
-  }).catch(err => {
+  } catch (err) {
     ElMessage({ message: err?.message || 'error', type: 'error', plain: true })
-  }).finally(() => {
+  } finally {
     recoveryLoading.value = false
-  })
+  }
 }
 
 function closeRecoveryDialog() {
@@ -727,7 +735,7 @@ const deleteConfirm = () => {
 }
 
 
-function submitPwd() {
+async function submitPwd() {
 
   if (setPwdLoading.value) return
 
@@ -759,19 +767,42 @@ function submitPwd() {
   }
 
   setPwdLoading.value = true
-  resetPassword(form.password).then(() => {
+  // 2026-11-12 uwu 第 1+2 步：新密码在浏览器内派生（PBKDF2-600k + HKDF），
+  // 只发登录密钥 + 新盐。改密后若会话中有旧 KEK（统一用户=旧邮件密钥，
+  // 暴露用户=旧 KEK），自动把 sym 包裹重包到新邮件密钥；老模型用户会话中
+  // 无旧 KEK，须先到安全中心输旧加密密码迁移。
+  try {
+    const newPassword = String(form.password || '').trim()
+    const newSalt = generateLoginSalt()
+    const newKeys = await deriveAuthKeys(newPassword, newSalt)
+    const oldKek = getMemoryKey()
+    await resetPassword(newKeys.loginKey, newSalt)
+    // 改密成功：内存里的盐换新（旧盐失效），邮件密钥换新。
+    setLoginSalt(newSalt)
+    if (oldKek) {
+      try {
+        await rewrapAll(oldKek, newKeys.mailKey)
+        setMemoryKey(newKeys.mailKey)
+        // 重包完成，暴露状态清零（已换到新密钥）。
+        await reportE2eeExposure(0).catch(() => {})
+      } catch (e) {
+        // 重包失败不阻断改密；安全中心会继续提示，可重试
+        console.warn('改密后重包失败（安全中心可重试）:', e && e.message)
+      }
+    }
     ElMessage({
       message: t('saveSuccessMsg'),
       type: 'success',
       plain: true,
     })
     pwdShow.value = false
-    setPwdLoading.value = false
     form.password = ''
     form.newPwd = ''
-  }).catch(() => {
+  } catch (e) {
+    // 失败时不清空，拦截器已弹错
+  } finally {
     setPwdLoading.value = false
-  })
+  }
 
 }
 

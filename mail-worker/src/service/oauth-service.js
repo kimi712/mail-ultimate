@@ -22,7 +22,13 @@ const oauthService = {
 			throw new BizError('用户已绑定有邮箱')
 		}
 
-		await loginService.register(c, { email, password: cryptoUtils.genRandomPwd(), code, token });
+		// OAuth 绑定建号：没有用户口令可派生，服务端用随机口令派生登录密钥
+		// 再注册（2026-11-12 uwu 第 1 步后 register 只收 {loginKey, salt}；
+		// 随机口令当即丢弃，用户只能走 OAuth 登录或日后在设置页设密码）。
+		const randomPwd = cryptoUtils.genRandomPwd();
+		const salt = cryptoUtils.generateSalt();
+		const { loginKey } = await cryptoUtils.deriveAuthKeys(randomPwd, salt);
+		await loginService.register(c, { email, loginKey, salt, code, token });
 
 		userRow = await userService.selectByEmail(c, email);
 

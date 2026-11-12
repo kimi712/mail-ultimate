@@ -11,6 +11,7 @@ import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
 import emailService from '../src/service/email-service';
 import aliasService from '../src/service/alias-service';
+import { registerNew, loginNew } from './auth-helpers.js';
 
 const IP_A = '203.0.113.51';
 const IP_B = '203.0.113.52';
@@ -34,15 +35,11 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 }
 
 async function register(email, ip) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123' }
-	});
+	return registerNew(api, email, { ip });
 }
 
 async function login(email, ip, password = 'password123') {
-	const res = await api('/login', { method: 'POST', ip, body: { email, password } });
+	const res = await loginNew(api, email, { ip, password });
 	return res.json?.data?.token;
 }
 

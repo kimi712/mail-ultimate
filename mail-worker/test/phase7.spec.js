@@ -10,6 +10,7 @@
 import { env, SELF } from 'cloudflare:test';
 import { describe, it, expect, beforeAll } from 'vitest';
 import { emailBriefColumns } from '../src/lib/email-list-columns';
+import { registerNew, loginNew, deriveLoginKeyForTest } from './auth-helpers.js';
 
 const TEST_JWT_SECRET = 'phase1-local-test-only-not-a-real-secret';
 const ORIGIN = 'https://aevorynthtech.com';
@@ -40,15 +41,16 @@ async function api(path, { method = 'GET', body, token, ip } = {}) {
 }
 
 async function register(email, ip, extra = {}) {
-	return api('/register', {
-		method: 'POST',
-		ip,
-		body: { email, password: 'password123', ...extra }
-	});
+	return registerNew(api, email, { ip, extra });
 }
 
 async function login(email, ip, password = 'password123') {
-	return api('/login', { method: 'POST', ip, body: { email, password } });
+	return loginNew(api, email, { ip, password });
+}
+// step-12 验密端点的新口径：先取盐派生主登录密钥再发（v2 账号不再收明文口令）。
+async function loginKeyFor(email, password = 'password123') {
+	const res = await api(`/login/salt?email=${encodeURIComponent(email)}`, {});
+	return deriveLoginKeyForTest(password, res.json?.data?.salt || '');
 }
 
 async function makeUser(email) {
@@ -159,22 +161,22 @@ describe('闲置自动锁定', () => {
 	it('unlock：密码正确 200；错误 401；连续 5 次错锁 403', async () => {
 		const user = await makeUser('p7-unlock@example.com');
 		const good = await api('/security/unlock', {
-			method: 'POST', token: user.token, body: { password: 'password123' }
+			method: 'POST', token: user.token, body: { loginKey: await loginKeyFor('p7-unlock@example.com') }
 		});
 		expect(good.json.code).toBe(200);
 		for (let i = 0; i < 4; i++) {
 			const bad = await api('/security/unlock', {
-				method: 'POST', token: user.token, body: { password: 'wrong-password' }
+				method: 'POST', token: user.token, body: { loginKey: await loginKeyFor('p7-unlock@example.com', 'wrong-password') }
 			});
 			expect(bad.json.code).toBe(401);
 		}
 		const fifth = await api('/security/unlock', {
-			method: 'POST', token: user.token, body: { password: 'wrong-password' }
+			method: 'POST', token: user.token, body: { loginKey: await loginKeyFor('p7-unlock@example.com', 'wrong-password') }
 		});
 		expect(fifth.json.code).toBe(403);
 		// 锁定期内正确密码也被拒
 		const locked = await api('/security/unlock', {
-			method: 'POST', token: user.token, body: { password: 'password123' }
+			method: 'POST', token: user.token, body: { loginKey: await loginKeyFor('p7-unlock@example.com') }
 		});
 		expect(locked.json.code).toBe(403);
 	});

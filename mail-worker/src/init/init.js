@@ -51,6 +51,7 @@ const dbInit = {
 		await this.v3_17DB(c);
 		await this.v3_18DB(c);
 		await this.v3_19DB(c);
+		await this.v3_20DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
 	},
@@ -1439,6 +1440,31 @@ const dbInit = {
 		// 逐条独立 try/catch + console.warn，幂等、可重跑。
 		const SQL_LIST = [
 			`ALTER TABLE setting ADD COLUMN day_send_limit INTEGER NOT NULL DEFAULT 5;`,
+		];
+		for (const sql of SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		}
+	},
+
+	async v3_20DB(c) {
+		// 白帽反馈修复（2026-11-12 uwu 第 1+3+5 步）：zk 退役 + 新凭证模型。
+		//   - user 表删 zk_salt / zk_verifier / zk_salt2 三列（zk 整体退役；
+		//     先把值清掉再删列；上午的链式升级方案已废弃，zk_salt2 从未上线、
+		//     从未有用户数据，直接删列即可；某库上若列不存在，失败即跳过）。
+		//   - user 新列 e2ee_exposed（0=正常/已统一，1=已暴露，2=老模型未迁移）。
+		//   - setting 新列 challenge_paused（$1000 悬赏挑战暂停开关，默认 0=不暂停）。
+		// 逐条独立 try/catch + console.warn，幂等、可重跑。
+		const SQL_LIST = [
+			`UPDATE user SET zk_salt = '', zk_verifier = '';`,
+			`ALTER TABLE user DROP COLUMN zk_salt;`,
+			`ALTER TABLE user DROP COLUMN zk_verifier;`,
+			`ALTER TABLE user DROP COLUMN zk_salt2;`,
+			`ALTER TABLE user ADD COLUMN e2ee_exposed INTEGER NOT NULL DEFAULT 0;`,
+			`ALTER TABLE setting ADD COLUMN challenge_paused INTEGER NOT NULL DEFAULT 0;`,
 		];
 		for (const sql of SQL_LIST) {
 			try {
