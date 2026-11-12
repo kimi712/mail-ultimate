@@ -2,6 +2,7 @@ import { S3Client, PutObjectCommand, DeleteObjectsCommand, GetObjectCommand } fr
 import settingService from './setting-service';
 import domainUtils from '../utils/domain-uitls';
 import { settingConst } from '../const/entity-const';
+import safeServe from '../utils/safe-serve';
 const s3Service = {
 
 	async putObj(c, key, content, metadata) {
@@ -83,12 +84,14 @@ const s3Service = {
 			Key: key
 		}));
 
+		// 白帽反馈 #1：绝不原样回吐存下来的 Content-Type/Disposition，
+		// 见 safe-serve.js（text/html、image/svg+xml 同源 serve 会当文档执行）。
 		return new Response(result.Body, {
-			headers: {
-				'Content-Type': result.ContentType || 'application/octet-stream',
-				'Content-Disposition': result.ContentDisposition || null,
-				'Cache-Control': result.CacheControl || null
-			}
+			headers: safeServe.safeServeHeaders({
+				contentType: result.ContentType,
+				contentDisposition: result.ContentDisposition,
+				cacheControl: result.CacheControl
+			})
 		});
 	},
 

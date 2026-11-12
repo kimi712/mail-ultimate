@@ -24,7 +24,7 @@ function fakeCtx() {
 }
 
 async function runInit() {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	return res.text();
 }
 

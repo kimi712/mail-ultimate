@@ -139,7 +139,7 @@ npx --prefix mail-worker wrangler deploy --config wrangler.deploy.toml 2>/dev/nu
 cat <<'EOF'
 
 ✅ 部署命令已执行。接下来按 DEPLOY.md §6 人工核对（不要跳过）：
-  1. 跑 /init 建库：curl "https://aevorynthtech.com/api/init/<JWT_SECRET>"（只跑一次，幂等）
+  1. 跑 /init 建库：curl -H "Authorization: Bearer <JWT_SECRET>" "https://aevorynthtech.com/api/init"（只跑一次，幂等）
   2. 核对 D1：user.locale 列、setting 新列、login_log/alert_log/register_log/audit_log/ip_blocklist 五表、perm 37–45
      以及默认角色：role_id=1 应为 send_type='day'、send_count=50（不是 ban）
   2b. 核对密钥：跑完 /init 后用 REST API 核对 KV 的 setting: 缓存里 resendTokens 含发件域名

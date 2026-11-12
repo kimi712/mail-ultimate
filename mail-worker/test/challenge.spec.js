@@ -102,7 +102,7 @@ async function setSetting(fields) {
 }
 
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	initText = await res.text();
 	await setSetting({ registerVerify: 1 });
 	// 注册即自动登录；这里只要 D1 里的管理员用户行（challenge 状态页

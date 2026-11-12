@@ -130,7 +130,7 @@ function todayStr() {
 }
 
 beforeAll(async () => {
-	await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	// Resend 配额放宽，避免预算干扰回落逻辑本身（配额不够的用例单独写 KV 撞线）。
 	const cached = (await env.kv.get('setting:', { type: 'json' })) || {};
 	cached.resendDayBudget = 100000;

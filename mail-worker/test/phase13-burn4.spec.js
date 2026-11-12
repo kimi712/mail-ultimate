@@ -72,13 +72,13 @@ let ADMIN_ID = 0;
 let USER_ID = 0;
 
 beforeAll(async () => {
-	const initRes = await SELF.fetch(`http://example.com/api/init/${env.jwt_secret}`);
+	const initRes = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${env.jwt_secret}` } });
 	expect(await initRes.text()).toBe('success');
 	// 关 Turnstile 验证（register_verify=CLOSE），只测本路逻辑
 	await setSetting({ registerVerify: 1 });
-	const regAdmin = await api('/register', { method: 'POST', ip: KNOWN_IP, body: { email: ADMIN_EMAIL, password: PWD } });
+	const regAdmin = await registerNew(api, ADMIN_EMAIL, { ip: KNOWN_IP, password: PWD });
 	expect(regAdmin.json.code).toBe(200);
-	const regUser = await api('/register', { method: 'POST', ip: KNOWN_IP, body: { email: USER_EMAIL, password: PWD } });
+	const regUser = await registerNew(api, USER_EMAIL, { ip: KNOWN_IP, password: PWD });
 	expect(regUser.json.code).toBe(200);
 	const c = fakeCtx();
 	ADMIN_ID = await userIdByEmail(c, ADMIN_EMAIL);

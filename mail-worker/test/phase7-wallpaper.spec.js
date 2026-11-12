@@ -71,7 +71,7 @@ let userId = 0;
 beforeAll(async () => {
 	// /init 的 secret 取 worker env（wrangler.jsonc vars.jwt_secret，本地测试 dummy），
 	// 不在测试文件里硬编码。
-	const res = await SELF.fetch(`http://example.com/api/init/${env.jwt_secret}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${env.jwt_secret}` } });
 	initText = await res.text();
 	// 关 Turnstile 验证（register_verify=CLOSE），只测本路逻辑
 	await setSetting({ registerVerify: 1 });

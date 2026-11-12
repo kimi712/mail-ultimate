@@ -224,8 +224,8 @@ command = "npm --prefix ../mail-vue install --legacy-peer-deps --no-package-lock
 
 1. **跑 `/init` 建库**（只跑一次；幂等，可重跑核对）：
    ```bash
-   curl "https://aevorynthtech.com/api/init/<JWT_SECRET>"
-   # 预期返回 success。注意：/init/:secret 的 secret 就是 jwt_secret（init.js:8-11）。
+   curl -H "Authorization: Bearer <JWT_SECRET>" "https://aevorynthtech.com/api/init"
+   # 预期返回 success。注意：/init 的 secret 就是 jwt_secret（放 Authorization 请求头里，绝不放 URL，见 init.js）。
    ```
    跑完立即核对（`wrangler d1 execute mail-ultimate --remote --command "..."`）：
    - `pragma_table_info(user)` 含 `locale` 列；`pragma_table_info(setting)` 含 `reg_key_alert_threshold`、`reg_circuit_open` 等新列；

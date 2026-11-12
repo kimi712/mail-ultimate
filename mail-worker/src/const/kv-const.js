@@ -3,7 +3,6 @@ const KvConst = {
 	SETTING: 'setting:',
 	SEND_DAY_COUNT: 'send_day_count:',
 	ANALYSIS_ECHARTS: 'analysis_echarts:',
-	PUBLIC_KEY: "public_key:",
 	RESEND_DAY: 'resend_day:',
 	RESEND_MONTH: 'resend_month:',
 	RESEND_ALERT_DAY: 'resend_quota_alert_day:',

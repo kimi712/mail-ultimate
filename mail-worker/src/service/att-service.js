@@ -10,6 +10,7 @@ import { v4 as uuidv4 } from 'uuid';
 import domainUtils from '../utils/domain-uitls';
 import settingService from "./setting-service";
 import userContext from '../security/user-context';
+import safeServe from '../utils/safe-serve';
 
 const attService = {
 
@@ -17,14 +18,18 @@ const attService = {
 
 		for (let attachment of attachments) {
 
+			// 白帽反馈 #1：入库的 contentType 绝不信任发件人自带的 mimeType——
+			// text/html、image/svg+xml 一旦同源 serve 会当文档执行。只存放行
+			// 类型，其余存 application/octet-stream（serve 层还会再算一遍）。
+			// Content-Disposition 不带文件名（发件人文件名未经清洗）。
 			let metadate = {
-				contentType: attachment.mimeType,
+				contentType: safeServe.normalizeStoredContentType(attachment.mimeType),
 			}
 
 			if (!attachment.contentId) {
-				metadate.contentDisposition = `attachment;filename=${attachment.filename}`
+				metadate.contentDisposition = `attachment`
 			} else {
-				metadate.contentDisposition = `inline;filename=${attachment.filename}`
+				metadate.contentDisposition = `inline`
 				metadate.cacheControl = `max-age=259200`
 			}
 
@@ -171,8 +176,8 @@ const attService = {
 
 		for (let att of attList) {
 			await r2Service.putObj(c, att.key, att.buff, {
-				contentType: att.type,
-				contentDisposition: `attachment;filename=${att.filename}`
+				contentType: safeServe.normalizeStoredContentType(att.type),
+				contentDisposition: `attachment`
 			});
 		}
 
@@ -189,9 +194,9 @@ const attService = {
 				continue;
 			}
 			await r2Service.putObj(c, attData.key, attData.buff, {
-				contentType: attData.mimeType,
+				contentType: safeServe.normalizeStoredContentType(attData.mimeType),
 				cacheControl: `max-age=259200`,
-				contentDisposition: `inline;filename=${attData.filename}`
+				contentDisposition: `inline`
 			});
 			delete attData.buff;
 		}

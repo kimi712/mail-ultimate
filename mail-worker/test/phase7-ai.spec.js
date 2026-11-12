@@ -177,7 +177,7 @@ let alice;
 let bob;
 let admin;
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	initText = await res.text();
 	// 关 Turnstile 验证（register_verify=CLOSE），只测本路逻辑
 	await setSetting({ registerVerify: 1, aiEnabled: 1 });
@@ -199,7 +199,7 @@ describe('v3_9DB 迁移', () => {
 	});
 
 	it('再跑一次 /init 幂等成功', async () => {
-		const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+		const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 		expect(await res.text()).toBe('success');
 		const row = await env.db.prepare(`SELECT ai_enabled FROM setting LIMIT 1`).first();
 		expect(row.ai_enabled).toBe(1);

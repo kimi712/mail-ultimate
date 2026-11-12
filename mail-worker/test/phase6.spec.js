@@ -194,7 +194,7 @@ function derToRawEcdsa(der) {
 
 let initText = '';
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	initText = await res.text();
 	// 关 Turnstile 验证（register_verify=CLOSE），只测本路逻辑
 	await setSetting({ registerVerify: 1 });
@@ -230,7 +230,7 @@ describe('v3_7DB 迁移', () => {
 	});
 
 	it('再跑一次 /init 幂等成功', async () => {
-		const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+		const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 		expect(await res.text()).toBe('success');
 		const { results } = await env.db.prepare(
 			`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'user_totp'`

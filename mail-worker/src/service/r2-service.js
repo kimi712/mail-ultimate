@@ -1,6 +1,16 @@
 import s3Service from './s3-service';
 import settingService from './setting-service';
 import kvObjService from './kv-obj-service';
+import safeServe from '../utils/safe-serve';
+import constant from '../const/constant';
+
+// 对象键只认 attachments/、static/、wallpapers/ 三个前缀（见 constant.js）。
+// 本站实际跑在 KV 上，KV 里还放着会话、设置缓存等运营键；/oss/<key> 无鉴权，
+// 前缀之外的一律按“不存在”处理（404，不透露键是否存在）。
+function isObjectKey(key) {
+	if (typeof key !== 'string' || key === '') return false;
+	return constant.OBJECT_KEY_PREFIXES.some(p => key.startsWith(p));
+}
 
 const r2Service = {
 
@@ -62,6 +72,10 @@ const r2Service = {
 	 */
 	async toObjResp(c, key) {
 		try {
+			// 白帽反馈 #4：非对象键一律 404（不调用底层存储，不透露键是否存在）。
+			if (!isObjectKey(key)) {
+				return null;
+			}
 			const storageType = await this.storageType(c);
 
 			if (storageType === 'KV') {
@@ -73,12 +87,11 @@ const r2Service = {
 				if (!obj) {
 					return null;
 				}
+				// 白帽反馈 #1：绝不原样回吐存下来的 Content-Type/Disposition——
+				// 附件的 mimeType 是发件人自带的，text/html、image/svg+xml
+				// 同源 serve 会当文档执行。用 safeServeHeaders 统一重算。
 				return new Response(obj.body, {
-					headers: {
-						'Content-Type': obj.httpMetadata?.contentType || 'application/octet-stream',
-						'Content-Disposition': obj.httpMetadata?.contentDisposition || null,
-						'Cache-Control': obj.httpMetadata?.cacheControl || null
-					}
+					headers: safeServeHeaders(obj.httpMetadata || {})
 				});
 			}
 

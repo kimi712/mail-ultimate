@@ -87,7 +87,7 @@ async function setSetting(fields) {
 }
 
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	initText = await res.text();
 	await setSetting({ registerVerify: 1 });
 }, 30000);

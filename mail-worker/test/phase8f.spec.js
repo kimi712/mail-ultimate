@@ -112,7 +112,7 @@ let initText = '';
 let alice;
 let bob;
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	initText = await res.text();
 	// F 的 8 张新表（与汇报 DDL 同文）。
 	await env.db.prepare(`CREATE TABLE IF NOT EXISTS contacts (

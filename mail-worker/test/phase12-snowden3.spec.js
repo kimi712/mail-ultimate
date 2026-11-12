@@ -151,7 +151,7 @@ let tokenA, tokenB, tokenC, tokenD, userIdA, userIdB, userIdC, userIdD;
 let accountIdA, accountIdB, accountIdC, accountIdD;
 
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${env.jwt_secret}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${env.jwt_secret}` } });
 	expect(await res.text()).toBe('success');
 	// 关 Turnstile 验证（register_verify=CLOSE），只测本路逻辑
 	await setSetting({ registerVerify: 1 });

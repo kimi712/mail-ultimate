@@ -92,7 +92,7 @@ async function regKeyAlertCount() {
 
 let initText = '';
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	initText = await res.text();
 	// 关 Turnstile 验证（register_verify=CLOSE），只测本路逻辑；TG 不配（只写 alert_log，不发 TG）
 	await setSetting({ registerVerify: 1, tgBotToken: '', tgChatId: '' });

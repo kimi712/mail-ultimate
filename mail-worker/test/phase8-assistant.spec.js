@@ -184,7 +184,7 @@ let alice;
 let bob;
 let carol;
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	initText = await res.text();
 	await setSetting({ registerVerify: 1, aiEnabled: 1 });
 	// v3_11DB 未并进 init.js 前，测试自建两张新表（与汇报 DDL 同文）。

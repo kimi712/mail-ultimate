@@ -64,7 +64,7 @@ let alice;
 let bob;
 
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	await res.text();
 	// registerVerify=1（phase8f 同款：注册无需 Turnstile；D1 与 KV 缓存都要置）。
 	await env.db.prepare(`UPDATE setting SET register_verify = 1`).run();

@@ -70,7 +70,7 @@ async function setSetting(fields) {
 
 let initText = '';
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	initText = await res.text();
 	// 关 Turnstile 验证（register_verify=CLOSE），只测 IP 筛选/分组/导出本身
 	await setSetting({ registerVerify: 1 });

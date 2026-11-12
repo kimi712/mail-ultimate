@@ -5,7 +5,10 @@ import {emailConst} from "../const/entity-const";
 const dbInit = {
 	async init(c) {
 
-		const secret = c.req.param('secret');
+		// 白帽反馈小项：secret 从 Authorization 请求头取，不再从 URL 取
+		// （/init/:secret 的形式会把 JWT secret 写进访问日志与 Referer）。
+		const authHeader = c.req.header('Authorization') || '';
+		const secret = authHeader.startsWith('Bearer ') ? authHeader.slice('Bearer '.length).trim() : '';
 
 		if (secret !== c.env.jwt_secret) {
 			return c.text('❌ JWT secret mismatch');

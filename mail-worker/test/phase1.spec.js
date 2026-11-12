@@ -114,7 +114,7 @@ function todayStr() {
 // describe 的 beforeAll 内）现造。
 let initText = '';
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	initText = await res.text();
 }, 30000);
 
@@ -156,7 +156,7 @@ describe('v3_5DB 迁移', () => {
 		expect(results.map((r) => r.perm_id)).toEqual([37, 38, 39, 40, 41, 42]);
 		expect(results.map((r) => r.perm_key)).toEqual([null, 'ip-block:query', 'ip-block:set', null, 'register-log:query', 'audit-log:query']);
 		// 再跑一次 init，种子行不翻倍
-		const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+		const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 		expect(await res.text()).toBe('success');
 		const again = await env.db.prepare(`SELECT COUNT(*) AS n FROM perm WHERE perm_id BETWEEN 37 AND 42`).first();
 		expect(again.n).toBe(6);

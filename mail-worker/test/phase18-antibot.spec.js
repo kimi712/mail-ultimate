@@ -82,7 +82,7 @@ function todayStr() {
 
 let initText = '';
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	initText = await res.text();
 	// 关 Turnstile 验证（registerVerify=CLOSE），只测门禁本身；熔断阈值抬高，避免多注册测试误触。
 	await setSetting({ registerVerify: 1, regCircuitThreshold: 999999, regSegmentLimit: 9 });

@@ -83,7 +83,7 @@ async function setSetting(fields) {
 }
 
 beforeAll(async () => {
-	const res = await SELF.fetch(`http://example.com/api/init/${TEST_JWT_SECRET}`);
+	const res = await SELF.fetch('http://example.com/api/init', { headers: { Authorization: `Bearer ${TEST_JWT_SECRET}` } });
 	initText = await res.text();
 	// syncDelete 默认 CLOSE(1)：自删只是软删；彻底删除不看它，始终物理删除。
 	await setSetting({ registerVerify: 1, syncDelete: 1 });
