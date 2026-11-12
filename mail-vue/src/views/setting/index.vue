@@ -217,7 +217,8 @@
         <el-table-column prop="ip" :label="$t('loginLogIp')" width="160" />
         <el-table-column :label="$t('loginLogDevice')">
           <!-- UA 单行省略（悬停看全文）：窄屏下 110 字符 UA 会换行撑高行高，行高必须确定化。 -->
-          <template #default="{row}"><span class="cell-ellipsis" :title="row.ua || '-'">{{ row.ua || '-' }}</span></template>
+          <!-- ④ 存量 uaText 有脏串（'Twitter undefined'、'Windows10'），展示层清一遍 -->
+          <template #default="{row}"><span class="cell-ellipsis" :title="formatDeviceText(row.ua) || '-'">{{ formatDeviceText(row.ua) || '-' }}</span></template>
         </el-table-column>
         <el-table-column :label="$t('loginLogNewIp')" width="110">
           <template #default="{row}">
@@ -307,6 +308,7 @@ import i18n from "@/i18n/index.js";
 import { SUPPORTED_LOCALES, SHORT_CODES, applyLocale, toStoredLocale } from "@/i18n/locale.js";
 import { loadPrefs, savePrefs, applyPrefs } from "@/utils/preferences.js";
 import { COMMON_TIME_ZONES, formatTimeZoneLabel } from "@/utils/datetime.js";
+import { formatDeviceText } from "@/utils/device.js";
 import ShortcutHelp from "@/components/shortcut-help/index.vue";
 import {useUserStore} from "@/store/user.js";
 import router from "@/router/index.js";

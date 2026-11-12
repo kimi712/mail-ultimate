@@ -176,6 +176,13 @@
                              v-model="setting.send"/>
                 </div>
               </div>
+              <!-- 每邮箱每日发信上限（v3_19DB）：按邮箱按天，UTC 0 点清零，默认 5；0 = 不额外限制，只用角色额度。 -->
+              <div class="setting-item">
+                <div><span>{{ $t('daySendLimit') }}</span></div>
+                <div>
+                  <el-input-number v-model="setting.daySendLimit" :min="0" :max="1000" @change="change" />
+                </div>
+              </div>
               <div class="setting-item">
                 <div>
                   <span>{{ $t('noRecipientTitle') }}</span>
@@ -358,6 +365,14 @@
                   <el-button class="opt-button" size="small" type="primary" @click="turnstileShow = true">
                     <Icon icon="lsicon:edit-outline" width="16" height="16"/>
                   </el-button>
+                </div>
+              </div>
+              <!-- 批量薅号防线（v3_18DB）：同网段（v4 /24、v6 /48）每日注册上限，默认 9；
+                   同网段滚动 7 天累计上限为该值的 3 倍。0 或空时后端按 9 兜底。 -->
+              <div class="setting-item">
+                <div><span>{{ $t('regSegmentLimit') }}</span></div>
+                <div>
+                  <el-input-number v-model="setting.regSegmentLimit" :min="1" :max="1000" @change="change" />
                 </div>
               </div>
             </div>

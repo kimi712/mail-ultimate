@@ -324,43 +324,37 @@ onBeforeUnmount(() => {
 
 <style lang="scss" scoped>
 .email-search {
-  position: absolute;
-  left: 0;
-  top: 50%;
-  transform: translateY(-50%);
+  /* 流式布局：跟在页面标题后面排布，不再 absolute left: 0 盖住标题
+    （非邮件列表页标题与搜索框重叠的根因）。relative 仍是下拉面板的
+     定位基准，面板继续锚定在触发框左缘。 */
+  position: relative;
   z-index: 10;
   /* 任务 2：面板加宽到 520px，四段分段器 + 两个日期选择器不再挤。 */
-  width: min(520px, calc(100% - 20px));
+  flex: 0 1 520px;
+  max-width: calc(100% - 20px);
+  min-width: 0;
   height: 36px;
   @media (max-width: 1280px) {
-    width: min(450px, calc(100% - 20px));
+    flex-basis: 450px;
   }
   @media (max-width: 1080px) {
-    width: min(400px, calc(100% - 20px));
+    flex-basis: 400px;
   }
 }
-
-@media (min-width: 768px) {
-  .email-search.account-show {
-    left: 259px;
-  }
-}
-
-/* account-show（收件箱/已发送/邮件详情页，左侧有 259px 账号栏）时收窄：
-   此前宽度不变（520px），右沿伸到 779px，与左侧 536px 起的功能搜索框重叠
-   240px——功能框盖在上面，把邮件框里伸过 536px 的已保存搜索摘要拦腰切断，
-   半个字被盖住就是顶栏左框文字重叠/糊掉的根因。
-   收窄后右沿与非 account-show 时一致：宽屏 259+261=520（功能框在 552，间距 32px）；
-   1280px 时 259+191=450（功能框在 482，间距 32px）；≤1279px 功能框隐藏，不收窄。 */
+/* account-show（收件箱/已发送/邮件详情页）时收窄：与邮件列表左沿对齐
+   （此前是 absolute left: 259px 的平移，流式布局下改为收窄触发框，
+   面板仍保持 520px 宽）。 */
 @media (min-width: 1281px) {
   .email-search.account-show {
-    width: 261px;
+    flex-basis: 261px;
+    max-width: 261px;
   }
 }
 
 @media (min-width: 1280px) and (max-width: 1280px) {
   .email-search.account-show {
-    width: 191px;
+    flex-basis: 191px;
+    max-width: 191px;
   }
 }
 
@@ -454,9 +448,12 @@ onBeforeUnmount(() => {
   .email-search {
     position: static;
     transform: none;
+    /* 桌面端 flex-basis 是 520px/450px/400px，移动端必须同时改
+       flex-basis（只改 width 会被 flex-basis 盖掉，按钮会撑到 520px）。 */
+    flex: 0 0 32px;
     width: 32px;
+    max-width: 32px;
     height: 32px;
-    flex-shrink: 0;
     margin-left: auto;
   }
 

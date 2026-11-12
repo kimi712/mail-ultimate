@@ -63,7 +63,7 @@ const userService = {
 				account,
 				name: account.name,
 				permKeys: [],
-				role: defaultRole,
+				role: await this.clampRoleDayLimit(c, defaultRole),
 				type: defaultRole?.roleId ?? userRow.type
 			};
 		}
@@ -72,6 +72,7 @@ const userService = {
 			roleService.selectById(c, userRow.type),
 			userRow.email === c.env.admin ? Promise.resolve(['*']) : permService.userPermKeys(c, userId)
 		]);
+		const clampedRole = await this.clampRoleDayLimit(c, roleRow);
 
 		const user = {};
 		user.userId = userRow.userId;
@@ -80,7 +81,7 @@ const userService = {
 		user.account = account;
 		user.name = account.name;
 		user.permKeys = permKeys;
-		user.role = roleRow;
+		user.role = clampedRole;
 		user.type = userRow.type;
 
 		if (c.env.admin === userRow.email) {
@@ -91,6 +92,21 @@ const userService = {
 		return user;
 	},
 
+
+	// 每邮箱每日上限（v3_19DB）：把 day 角色的 sendCount 钳到
+	// min(角色额度, 设置 daySendLimit，默认 5)，供发件页“今日还剩 X 封”显示；
+	// 读设置失败时返回原角色，不阻断登录。
+	async clampRoleDayLimit(c, roleRow) {
+		if (!roleRow || roleRow.sendType !== 'day' || !roleRow.sendCount) {
+			return roleRow;
+		}
+		try {
+			const setting = await settingService.query(c);
+			return { ...roleRow, sendCount: roleService.effectiveDayLimit(roleRow, setting?.daySendLimit) };
+		} catch (e) {
+			return roleRow;
+		}
+	},
 
 	async resetPassword(c, params, userId) {
 

@@ -490,10 +490,14 @@ onBeforeUnmount(() => {
 .header {
   text-align: right;
   font-size: 12px;
-  display: grid;
-  height: 100%;
+  /* 顶栏标题与两个搜索框同一行排布：之前是 grid auto+1fr，但邮件搜索 /
+     功能搜索都是 absolute（left: 0 / 552px），非邮件列表页搜索框盖在
+     页面标题上（“搜安全中心件”）。改成 flex 流式布局，搜索框跟在标题
+     后面自然排布，不再用绝对定位硬编码横坐标，任何标题长度都不会重叠。 */
+  display: flex;
+  align-items: center;
   gap: 10px;
-  grid-template-columns: auto 1fr;
+  height: 100%;
   position: relative;
 }
 
@@ -546,6 +550,10 @@ onBeforeUnmount(() => {
   align-items: center;
   height: 100%;
   min-width: 0;
+  /* 标题区不收缩：顶栏空间不够时由搜索框弹性收窄承担（实测 1366px 下
+     toolbar 占 227px，标题可收缩时 "安全中心" 会被压成 "安…"）。
+     标题本身只有几个字，搜索框缩到 300px 仍可用。 */
+  flex: 0 0 auto;
 }
 
 .breadcrumb-item {
@@ -555,6 +563,7 @@ onBeforeUnmount(() => {
   overflow: hidden;
   white-space: nowrap;
   text-overflow: ellipsis;
+  min-width: 0;
 }
 
 .toolbar {
@@ -562,6 +571,8 @@ onBeforeUnmount(() => {
   justify-content: end;
   align-items: center;
   gap: 15px;
+  /* 顶栏右端工具区：flex 布局下靠右。 */
+  margin-left: auto;
   @media (max-width: 767px) {
     gap: 10px;
   }

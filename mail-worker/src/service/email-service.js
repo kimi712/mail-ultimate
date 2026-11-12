@@ -681,7 +681,7 @@ const emailService = {
 
 		// 速度优化：前置的几组查询互不依赖，并行跑（原来是 5 次串行 D1/KV 往返）。
 		// 第 1 批：设置 + 正文图片处理（图片处理内部自己再读一次设置，不依赖外层结果）。
-		const [{ resendTokens, r2Domain, send, domainList }, { imageDataList, html }] = await Promise.all([
+		const [{ resendTokens, r2Domain, send, domainList, daySendLimit }, { imageDataList, html }] = await Promise.all([
 			settingService.query(c),
 			attService.toImageUrlHtml(c, content)
 		]);
@@ -776,14 +776,21 @@ const emailService = {
 
 		//如果不是管理员，权限设置了发送次数（系统代发 systemSend 不受日限额约束，
 		// 否则死亡开关提醒信可能因用户当天发信满额而发不出去）。
+		// 每邮箱每日上限（v3_19DB）：day 角色取 min(角色额度, 设置 daySendLimit，默认 5)；
+		// count 角色仍按总量（lifetime）走原口径。user.send_count 是 TEXT 列，这里
+		// Number() 规整后再算，避免 '4' + 1 = '41' 这类字符串拼接把限额判错。
+		// 计次口径（按封计，2026-11-12 用户定）：一封邮件不管发给几个人只计 1 次，
+		// 限额检查按 +1 判定（原口径按收件人数计）。
 		if (c.env.admin !== userRow.email && roleRow.sendCount && !systemSend) {
+			const used = Number(userRow.sendCount) || 0;
+			const dayLimit = roleService.effectiveDayLimit(roleRow, daySendLimit);
 
-			if (userRow.sendCount >= roleRow.sendCount) {
+			if (used >= dayLimit) {
 				if (roleRow.sendType === 'day') throw new BizError(t('daySendLimit'), 403);
 				if (roleRow.sendType === 'count') throw new BizError(t('totalSendLimit'), 403);
 			}
 
-			if (userRow.sendCount + receiveEmail.length > roleRow.sendCount) {
+			if (used + 1 > dayLimit) {
 				if (roleRow.sendType === 'day') throw new BizError(t('daySendLack'), 403);
 				if (roleRow.sendType === 'count') throw new BizError(t('totalSendLack'), 403);
 			}
@@ -1415,13 +1422,14 @@ const emailService = {
 		}
 		// 速度优化：以下三组互不依赖，并行跑（失败语义不变）。
 		// ① 计数自增与邮件入库并行：自增本来就在入库前触发，入库失败仍会计数（原来也一样）。
+		//    计次按封（每封 1 次，不管几个收件人），所以这里传 1。
 		// ② 两类附件保存并行（都只依赖 emailId）。
 		// ③ 日统计 KV 读改写与入库/附件并行（纯统计，不依赖邮件行；并发两封的读改写竞态原来就有，未变）。
 		const insertAndAtts = (async () => {
 			const [row] = await Promise.all([
 				orm(c).insert(email).values(emailData).returning().get(),
 				(roleRow.sendCount && roleRow.sendType !== 'internal')
-					? userService.incrUserSendCount(c, receiveEmail.length, userId)
+					? userService.incrUserSendCount(c, 1, userId)
 					: Promise.resolve()
 			]);
 			await Promise.all([

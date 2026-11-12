@@ -12,21 +12,7 @@ import userContext from '../security/user-context';
 import loginLogService from '../service/login-log-service';
 import settingService from '../service/setting-service';
 import reqUtils from '../utils/req-utils';
-import { UAParser } from 'ua-parser-js';
-
-function parseDevice(ua) {
-	try {
-		const parser = new UAParser(String(ua || ''));
-		const { browser, device, os } = parser.getResult();
-		const browserText = browser.name ? `${browser.name} ${browser.version || ''}`.trim() : '';
-		const osText = os.name ? `${os.name} ${os.version || ''}`.trim() : '';
-		const deviceText = [device.vendor, device.model].filter(Boolean).join(' ')
-			|| (device.type ? device.type : '') || 'Desktop';
-		return { device: deviceText, browser: [browserText, osText].filter(Boolean).join(' / ') };
-	} catch (e) {
-		return { device: '', browser: '' };
-	}
-}
+import { parseStoredUaText } from '../utils/device-text.js';
 
 app.get('/security/login-history', async (c) => {
 	const params = c.req.query();
@@ -52,7 +38,7 @@ app.get('/security/login-history', async (c) => {
 		maskOn = false;
 	}
 	const list = data.list.map(row => {
-		const parsed = parseDevice(row.ua);
+		const parsed = parseStoredUaText(row.ua);
 		return {
 			time: row.createTime,
 			ip: maskOn ? reqUtils.maskIp(row.ip) : row.ip,

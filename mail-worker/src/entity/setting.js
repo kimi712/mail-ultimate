@@ -79,6 +79,12 @@ export const setting = sqliteTable('setting', {
 	regRateLimitPerMin: integer('reg_rate_limit_per_min').default(5).notNull(),
 	regCircuitThreshold: integer('reg_circuit_threshold').default(20).notNull(),
 	regCircuitOpen: integer('reg_circuit_open').default(0).notNull(),
+	// 批量薅号防线（v3_18DB）：同一 /24（v4）或 /48（v6）网段 24 小时内累计注册上限，
+	// 默认 9（2026-11-10 爆发号里 116.204.166 段 2 小时攒了 21 个；学校/企业共用出口
+	// 真人一天一般到不了 9，留余量）。管理员在系统设置页可调；D1 列由 init.js v3_18DB 建。
+	regSegmentLimit: integer('reg_segment_limit').default(9).notNull(),
+	// 每邮箱每日发信上限（v3_19DB，默认 5；0/空 = 不额外限制，只用角色额度）。
+	daySendLimit: integer('day_send_limit').default(5).notNull(),
 	resendDayBudget: integer('resend_day_budget').default(100).notNull(),
 	resendMonthBudget: integer('resend_month_budget').default(3000).notNull(),
 	// Phase 2–4：注册密钥库存告警阈值（剩余总量低于此值告警，默认 500）

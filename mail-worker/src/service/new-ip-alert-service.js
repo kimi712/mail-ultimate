@@ -20,21 +20,7 @@ import reqUtils from '../utils/req-utils';
 import BizError from '../error/biz-error';
 import { t } from '../i18n/i18n';
 import { and, desc, eq } from 'drizzle-orm';
-import { UAParser } from 'ua-parser-js';
-
-function parseDevice(ua) {
-	try {
-		const parser = new UAParser(String(ua || ''));
-		const { browser, device, os } = parser.getResult();
-		const browserText = browser.name ? `${browser.name} ${browser.version || ''}`.trim() : '';
-		const osText = os.name ? `${os.name} ${os.version || ''}`.trim() : '';
-		const deviceText = [device.vendor, device.model].filter(Boolean).join(' ')
-			|| (device.type ? device.type : '') || 'Desktop';
-		return { device: deviceText, browser: [browserText, osText].filter(Boolean).join(' / ') };
-	} catch (e) {
-		return { device: '', browser: '' };
-	}
-}
+import { parseStoredUaText } from '../utils/device-text.js';
 
 const newIpAlertService = {
 
@@ -58,7 +44,7 @@ const newIpAlertService = {
 			if (row.isNewIp !== 1) continue;
 			if (knownSet.has(row.ip)) continue;
 			if (row.createTime < cutoff) continue;
-			const parsed = parseDevice(row.ua);
+			const parsed = parseStoredUaText(row.ua);
 			pending.push({
 				logId: row.logId,
 				time: row.createTime,
@@ -112,7 +98,7 @@ const newIpAlertService = {
 			if (!await userSecurityService.isLoginAlertEnabled(c, userId)) {
 				return { notified: false, reason: 'disabled' };
 			}
-			const parsed = parseDevice(ua);
+			const parsed = parseStoredUaText(ua);
 			const masked = reqUtils.maskIp(ip);
 			await telegramService.sendAlert(c,
 				`🔔 ${t('newIpAlertTgTitle')}\n${t('newIpAlertTgAccount')}: ${email}\n${t('newIpAlertTgIp')}: ${masked}\n${t('newIpAlertTgDevice')}: ${parsed.device} ${parsed.browser}`.trim(),

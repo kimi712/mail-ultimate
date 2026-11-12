@@ -9,19 +9,27 @@
         <!-- 安全评分：只展示，不锁功能 -->
         <div class="section" id="sec-score">
           <div class="section-title">{{ $t('securityScore') }}</div>
-          <div class="score-row">
+          <!-- ⑧ 加载中先显示占位，不拿本地回退分抢跑：旧版数据未到先显 20、
+               服务端总分（老站 18）一到又跳成 18，闪一下。本地回退只在加载
+               结束且无服务端数据时才用。 -->
+          <div class="score-row" v-if="!scoreLoading">
             <div class="score-num">{{ score }}<span class="score-total">/100</span></div>
             <el-progress :percentage="score" :show-text="false" class="score-bar" />
           </div>
+          <div class="score-row" v-else>
+            <div class="score-num">—<span class="score-total">/100</span></div>
+          </div>
           <div class="score-tip">{{ $t('securityScoreTip') }}</div>
           <!-- Phase 8 斯诺登元素补齐：分数解读行（按分数分档，给一句人话）。 -->
-          <div class="score-level">{{ $t(scoreLevelKey) }}</div>
+          <div class="score-level" v-if="!scoreLoading">{{ $t(scoreLevelKey) }}</div>
           <!-- 跨页跳转根治：加载态预留 410px（服务端 10 项分项），数据来了填进去不撑大页面。 -->
           <div class="score-list" :style="{ minHeight: scoreLoading ? '410px' : undefined }">
+            <template v-if="!scoreLoading">
             <div v-for="item in scoreItems" :key="item.key" class="score-item">
               <span>{{ $t(scoreLabelKeys[item.key] || 'securityScore') }}</span>
               <el-tag :type="item.ok ? 'success' : 'info'">{{ item.score }}/{{ item.max }}</el-tag>
             </div>
+            </template>
           </div>
           <div v-if="scoreData && scoreData.suggestions && scoreData.suggestions.length" class="score-tip">
             <div v-for="s in scoreData.suggestions" :key="s">· {{ $t(s) }}</div>
@@ -60,13 +68,21 @@
           </div>
           <!-- 跨页跳转根治：加载态预留 160px（表头 + 3 行会话），数据来了填进去不撑大页面。 -->
           <div class="tbl-reserve" :style="{ minHeight: sessionLoading ? '160px' : undefined }">
-          <el-table :data="sessionList" v-loading="sessionLoading" style="width: 100%" :empty-text="$t('sessionEmpty')">
+          <!-- ⑧ 首次加载完成前不渲染表体（只留预留高度），消掉锚点跳转的空表闪 -->
+          <el-table v-if="sessionLoaded || !sessionLoading" :data="sessionList" v-loading="sessionLoading" style="width: 100%" :empty-text="$t('sessionEmpty')">
             <el-table-column :label="$t('loginLogDevice')">
-              <template #default="{row}">{{ [row.device, row.browser].filter(Boolean).join(' · ') || row.ua || $t('sessionUnknown') }}</template>
+              <template #default="{row}">{{ formatDeviceBrowser(row.device, row.browser, row.ua) || $t('sessionUnknown') }}</template>
             </el-table-column>
-            <el-table-column prop="ip" :label="$t('loginLogIp')" width="160" />
-            <el-table-column prop="createdAt" :label="$t('loginLogTime')" width="180" />
-            <el-table-column prop="lastActiveAt" :label="$t('sessionLastActive')" width="180" />
+            <el-table-column :label="$t('loginLogIp')" width="160">
+              <template #default="{row}">{{ row.ip || '—' }}</template>
+            </el-table-column>
+            <!-- ⑥ 时间列不要直出原始 ISO：用 formatDateTime（按界面语言+时区），空值显示 — -->
+            <el-table-column :label="$t('loginLogTime')" width="180">
+              <template #default="{row}">{{ row.createdAt ? formatDateTime(row.createdAt) : '—' }}</template>
+            </el-table-column>
+            <el-table-column :label="$t('sessionLastActive')" width="180">
+              <template #default="{row}">{{ row.lastActiveAt ? formatDateTime(row.lastActiveAt) : '—' }}</template>
+            </el-table-column>
             <el-table-column width="150">
               <template #default="{row}">
                 <el-tag v-if="row.current" type="success">{{ $t('sessionCurrent') }}</el-tag>
@@ -83,11 +99,11 @@
           <div class="desc">{{ $t('securityLoginHistoryNoGeo') }}</div>
           <!-- 跨页跳转根治：加载态预留 840px（表头 + 20 行），数据来了填进去不撑大页面。 -->
           <div class="tbl-reserve" :style="{ minHeight: loginLogLoading ? '840px' : undefined }">
-          <el-table :data="loginLogList" v-loading="loginLogLoading" style="width: 100%" :empty-text="$t('loginLogEmpty')">
+          <el-table v-if="loginLogLoaded || !loginLogLoading" :data="loginLogList" v-loading="loginLogLoading" style="width: 100%" :empty-text="$t('loginLogEmpty')">
             <el-table-column prop="time" :label="$t('loginLogTime')" width="180" />
             <el-table-column prop="ip" :label="$t('loginLogIp')" width="160" />
             <el-table-column :label="$t('loginLogDevice')">
-              <template #default="{row}">{{ [row.device, row.browser].filter(Boolean).join(' · ') || $t('sessionUnknown') }}</template>
+              <template #default="{row}">{{ formatDeviceBrowser(row.device, row.browser) || $t('sessionUnknown') }}</template>
             </el-table-column>
             <el-table-column :label="$t('securityLoginHistoryLocation')" width="110">
               <template #default="{row}">{{ row.location || $t('securityLoginHistoryNoLocation') }}</template>
@@ -123,13 +139,13 @@
           </div>
           <!-- 跨页跳转根治：加载态预留 840px（表头 + 20 行），数据来了填进去不撑大页面。 -->
           <div class="tbl-reserve" :style="{ minHeight: auditLoading ? '840px' : undefined }">
-          <el-table :data="auditLogList" v-loading="auditLoading" style="width: 100%" :empty-text="$t('securityAuditEmpty')">
+          <el-table v-if="auditLoaded || !auditLoading" :data="auditLogList" v-loading="auditLoading" style="width: 100%" :empty-text="$t('securityAuditEmpty')">
             <el-table-column prop="time" :label="$t('loginLogTime')" width="180" />
             <el-table-column prop="action" :label="$t('securityAuditAction')" width="200" />
             <el-table-column prop="ip" :label="$t('loginLogIp')" width="160" />
             <el-table-column :label="$t('loginLogDevice')">
               <!-- UA 单行省略（悬停看全文）：120 字符 UA 在 320px 列宽里会换 3 行、行高从 39px 涨到 ~85px，20 行能差出 900px，行高必须确定化。 -->
-              <template #default="{row}"><span class="cell-ellipsis" :title="row.ua || '-'">{{ row.ua || '-' }}</span></template>
+              <template #default="{row}"><span class="cell-ellipsis" :title="formatDeviceText(row.ua) || '-'">{{ formatDeviceText(row.ua) || '-' }}</span></template>
             </el-table-column>
           </el-table>
           </div>
@@ -502,6 +518,8 @@ import {
 } from '@/utils/pqkem.js'
 import {optionsToCreateArgs, credentialToJson} from '@/utils/webauthn.js'
 import SectionNav from "@/components/section-nav/index.vue";
+import { formatDateTime } from '@/utils/datetime.js'
+import { formatDeviceText, formatDeviceBrowser } from '@/utils/device.js'
 
 defineOptions({
   name: 'security'
@@ -592,6 +610,7 @@ const loginLogLoaded = ref(false)
 
 const sessionList = ref([])
 const sessionLoading = ref(true)
+const sessionLoaded = ref(false)
 
 // Phase 8 B：服务端评分（分项 + 建议）与本人审计记录。
 const scoreData = ref(null)
@@ -611,6 +630,7 @@ const scoreLabelKeys = {
 }
 const auditLogList = ref([])
 const auditLoading = ref(true)
+const auditLoaded = ref(false)
 const auditType = ref('')
 const auditNum = ref(1)
 const auditSize = 20
@@ -770,6 +790,7 @@ function loadSessions() {
   sessionLoading.value = true
   return sessions().then((data) => {
     sessionList.value = Array.isArray(data) ? data : (data?.list || [])
+    sessionLoaded.value = true
     sessionLoading.value = false
   }).catch(() => {
     sessionLoading.value = false
@@ -793,6 +814,7 @@ function loadAuditLog() {
   auditLoading.value = true
   return myAuditLog({num: auditNum.value, size: auditSize, type: auditType.value}).then((data) => {
     auditLogList.value = data.list || []
+    auditLoaded.value = true
     auditLoading.value = false
   }).catch(() => {
     auditLoading.value = false

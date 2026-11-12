@@ -249,18 +249,16 @@ onBeforeUnmount(() => {
 
 <style lang="scss" scoped>
 .feature-search {
-  position: absolute;
-  /* 与邮件搜索框拉开 32px 间距（此前 536px 只留 16px，贴得太紧）。 */
-  left: 552px;
-  top: 50%;
-  transform: translateY(-50%);
+  /* 流式布局：跟在邮件搜索框后面排布，不再 absolute left: 552px
+    （邮件搜索框宽度随标题/页面变化，固定 552px 会与它重叠或留大缝）。
+    relative 仍是下拉面板的定位基准。 */
+  position: relative;
   z-index: 10;
-  width: 240px;
+  flex: 0 0 240px;
   height: 36px;
 
   @media (max-width: 1280px) {
-    left: 482px;
-    width: 220px;
+    flex-basis: 220px;
   }
 
   @media (max-width: 1279px) {
@@ -346,9 +344,11 @@ onBeforeUnmount(() => {
   .feature-search {
     position: static;
     transform: none;
+    /* 桌面端 flex-basis 是 240px，移动端必须同时改 flex-basis
+       （只改 width 会被 flex-basis 盖掉）。 */
+    flex: 0 0 32px;
     width: 32px;
     height: 32px;
-    flex-shrink: 0;
     display: block;
   }
 

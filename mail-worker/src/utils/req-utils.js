@@ -70,6 +70,45 @@ const reqUtils = {
 		}
 	},
 
+	// 批量薅号防线（v3_18DB）：IP 网段键。IPv4 取 /24（前三段 + '.0'，如 '116.204.166.0'）；
+	// IPv6 取 /48（前三组 hextet，展开 :: 归一化、小写，如 '2408:8207:1832'）；
+	// IPv4 映射地址（::ffff:1.2.3.4）按 v4 /24 算；'Unknown' 与非法输入原样返回，
+	// 调用方据此跳过段限流（未知 IP 不分组、不误拦）。
+	getIpSubnet(c, ip) {
+		const raw = (ip || this.getIp(c) || '').trim();
+		if (!raw || raw === 'Unknown') {
+			return raw || 'Unknown';
+		}
+		if (!raw.includes(':')) {
+			const parts = raw.split('.');
+			if (parts.length === 4 && parts.every(p => /^\d+$/.test(p) && Number(p) <= 255)) {
+				return parts.slice(0, 3).join('.') + '.0';
+			}
+			return raw;
+		}
+		try {
+			let addr = raw.split('%')[0].toLowerCase();
+			// IPv4 映射地址（::ffff:1.2.3.4）先按点分部分算 v4 /24
+			if (addr.includes('.')) {
+				const lastColon = addr.lastIndexOf(':');
+				const v4 = addr.slice(lastColon + 1);
+				const parts = v4.split('.');
+				if (parts.length !== 4 || parts.some(p => p === '' || Number(p) > 255)) {
+					return addr;
+				}
+				return parts.slice(0, 3).join('.') + '.0';
+			}
+			const groups = expandIPv6(addr);
+			if (!groups) {
+				return addr;
+			}
+			return groups.slice(0, 3).join(':');
+		} catch (e) {
+			console.error('解析 IP 网段失败:', e.message);
+			return raw;
+		}
+	},
+
 	// Phase 6：IP 脱敏。IPv4 末段 → 0（如 1.2.3.4 → 1.2.3.0）；IPv6 只留 /64 段
 	// （复用 getIpSegment 的归一化）；'Unknown' 与非法输入原样返回，永不抛错。
 	// 只用于日志 ip 列的写入脱敏，ip_segment 列与限额/封禁检查不受影响。
@@ -102,11 +141,15 @@ const reqUtils = {
 		let osInfo = null;
 
 		if (browser.name) {
-			browserInfo = browser.name + ' ' + browser.version;
+			// 版本缺失时不拼 "undefined"，有版本时用空格隔开（之前是
+			// `name + ' ' + version`，version 为 undefined 时出 "Chrome undefined"）。
+			browserInfo = browser.version ? browser.name + ' ' + browser.version : browser.name;
 		}
 
 		if (os.name) {
-			osInfo = os.name + os.version;
+			// 同上：版本缺失不拼 "undefined"，有版本时加空格
+			//（之前是 `name + version`，直接拼出 "Linuxundefined"、"Windows10"）。
+			osInfo = os.version ? os.name + ' ' + os.version : os.name;
 		}
 
 		let deviceInfo = 'Desktop';

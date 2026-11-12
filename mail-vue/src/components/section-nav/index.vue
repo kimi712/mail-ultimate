@@ -119,9 +119,10 @@ onBeforeUnmount(() => {
   margin-bottom: 8px;
   /* 粘性栏必须不透明：透明时滚动中的内容（蓝色按钮等）会从栏下透出，
      与半透明胶囊叠在一起，标签被压住、按钮文字被截断（如设置页“绑定 Telegram”
-     按钮卡在栏下 7 秒以上）。底色与页面同色，壁纸模式下与 .main-view 同款
-     半透明 + 毛玻璃，仍融入页面。 */
-  background: var(--el-bg-color);
+     按钮卡在栏下 7 秒以上）。用卡片同款 --el-bg-color-overlay：壁纸模式
+     0.92 近不透明、非壁纸纯色——var(--el-bg-color) 在壁纸模式只有 0.55，
+     栏还是透的（2026-11-11 老站复验：滚动时正文从栏下透出）。 */
+  background: var(--el-bg-color-overlay);
   border-bottom: 0;
 
   &::-webkit-scrollbar {
@@ -129,21 +130,34 @@ onBeforeUnmount(() => {
   }
 }
 
-/* 壁纸模式：与 .main-view 同款半透明 + 毛玻璃，融入页面且不透内容。 */
+/* 桌面端：胶囊换行显示，不要横向滚动——14 个胶囊一行排不下，横向滚
+   又没滚动条、右边几个根本看不到（2026-11-11 用户截图反馈）。
+   换行后粘性栏变两行，全部胶囊一眼可见；手机端仍横向滑动，省纵向空间。 */
+@media (min-width: 768px) {
+  .section-nav {
+    flex-wrap: wrap;
+    overflow-x: visible;
+  }
+}
+
+/* 壁纸模式：粘性栏仍必须不透明——0.62/0.72 半透明 + 毛玻璃挡不住滚动
+   中的正文（蓝色按钮、文字会从栏下透出来重叠，2026-11-11 实测）。
+   直接用与页面同色的实底，毛玻璃只留一个聊胜于无的 blur。
+   栏在卡片顶部当一条实底横条，与非壁纸模式行为一致。 */
 html[data-wallpaper="1"] .layout.has-wallpaper .section-nav {
-  background: rgba(13, 18, 28, 0.62);
+  background: var(--el-bg-color-overlay);
   backdrop-filter: blur(12px) saturate(1.1);
   -webkit-backdrop-filter: blur(12px) saturate(1.1);
 }
 html.dark[data-wallpaper="1"] .layout.has-wallpaper .section-nav {
-  background: rgba(10, 10, 14, 0.62);
+  background: var(--el-bg-color-overlay);
 }
 @media (max-width: 767px) {
   html[data-wallpaper="1"] .layout.has-wallpaper .section-nav {
-    background: rgba(13, 18, 28, 0.72);
+    background: var(--el-bg-color-overlay);
   }
   html.dark[data-wallpaper="1"] .layout.has-wallpaper .section-nav {
-    background: rgba(10, 10, 14, 0.72);
+    background: var(--el-bg-color-overlay);
   }
 }
 

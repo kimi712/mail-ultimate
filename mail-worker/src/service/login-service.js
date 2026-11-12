@@ -21,6 +21,7 @@ import { t } from '../i18n/i18n.js';
 import verifyRecordService from './verify-record-service';
 import reqUtils from '../utils/req-utils';
 import registerLogService from './register-log-service';
+import { isBotUa, isBotRegisterUa, isRandom9Name } from '../utils/bot-fingerprint';
 import ipBlocklistService from './ip-blocklist-service';
 import telegramService from './telegram-service';
 import loginLogService from './login-log-service';
@@ -93,7 +94,7 @@ const loginService = {
 		const ipSegment = reqUtils.getIpSegment(c);
 		const ua = c.req.header('user-agent') || '';
 		// verifyMode 由内层在读到 setting 后写入 ctx；读不到时默认 CLOSE(1)。
-		const ctx = { ip, ipSegment, verifyMode: settingConst.registerVerify.CLOSE };
+		const ctx = { ip, ipSegment, ua, verifyMode: settingConst.registerVerify.CLOSE };
 
 		try {
 			const result = await this._register(c, params, ctx);
@@ -139,12 +140,19 @@ const loginService = {
 		const { ip, ipSegment } = ctx;
 
 		let { regKey, register, registerVerify, regVerifyCount, minEmailPrefix, emailPrefixFilter,
-			ipRegLimit, ipRegWindowHours, regRateLimitPerMin, regCircuitThreshold, regCircuitOpen } = await settingService.query(c)
+			ipRegLimit, ipRegWindowHours, regRateLimitPerMin, regCircuitThreshold, regCircuitOpen, regSegmentLimit } = await settingService.query(c)
 
 		ctx.verifyMode = registerVerify;
 
 		if (register === settingConst.register.CLOSE) {
 			throw new BizError(t('regDisabled'));
+		}
+
+		// 批量薅号门禁 1：机器人 UA 硬拒。UA 取请求头 user-agent 原样；
+		// 光秃秃的 "Mozilla/5.0" 没有任何真实浏览器会发，可单独拒。
+		// 空白 UA 不单独拒——真人流量里也有大量空白 UA（脚本/curl/部分客户端不带 UA）。
+		if (isBotUa(ctx.ua)) {
+			throw new BizError(t('botUaBlocked'), 429);
 		}
 
 		// ---- 注册门禁（契约 §6 A 路）：全部在 register===CLOSE 判断之后、格式校验之前 ----
@@ -183,10 +191,20 @@ const loginService = {
 		// 占位行 result=RESERVED，不计入成功数、计入分钟尝试数；外层收尾时 UPDATE 为最终结果。
 		const ipLimit = ipRegLimit ?? 3;
 		const windowHours = ipRegWindowHours ?? 24;
+		const segmentLimit = regSegmentLimit ?? 9;
+		const ipSubnet = reqUtils.getIpSubnet(c, ip);
 		const reservedLogId = await registerLogService.reserveSlot(c, {
-			ip, ipSegment, email: email || '', limit: ipLimit, windowHours
+			ip, ipSegment, email: email || '', limit: ipLimit, windowHours,
+			segmentLimit, segmentWindowHours: windowHours, ipSubnet, ua: ctx.ua
 		});
 		if (!reservedLogId) {
+			// 占位失败可能是单 IP 限额，也可能是网段限额（24h 或 7 天累积）：
+			// 读数区分，报错口径对得上，管理员在注册日志里也能定位。
+			const segCount24h = await registerLogService.countRecentBySubnet(c, ipSubnet, windowHours);
+			const segCount7d = segCount24h >= segmentLimit ? segCount24h : await registerLogService.countRecentBySubnet(c, ipSubnet, 168);
+			if (segCount24h >= segmentLimit || segCount7d >= segmentLimit * 3) {
+				throw new BizError(t('regSegmentLimit'), 429);
+			}
 			throw new BizError(t('regIpLimit'), 429);
 		}
 		ctx.reservedLogId = reservedLogId;
@@ -206,6 +224,22 @@ const loginService = {
 
 		if (emailUtils.getName(email).length > 64) {
 			throw new BizError(t('emailLengthLimit'));
+		}
+
+		// 批量薅号门禁 2：9 位随机名 + 空白 UA + 短时集中注册，三者组合才拒。
+		// 空白 UA 单独不是信号（真人流量里也大量出现）；完整浏览器 UA 的真人
+		//（哪怕名字像随机串，如 zhangsan1）不受这条影响。纯字母 9 位名（如 xiangqian、
+		// sihongliu 这类真名）不含数字，不进随机名判定，直接放行。
+		// “集中”取两个维度：同 IP 10 分钟内第 2 次成功/占位，或同网段 60 分钟内第 3 次
+		//（2026-11-10 爆发号同 /24 段 2 小时攒 21 个，靠换 IP 绕单 IP 限额）。
+		if (isRandom9Name(emailUtils.getName(email)) && isBotRegisterUa(ctx.ua)) {
+			const [ipRecent, segRecent] = await Promise.all([
+				registerLogService.countRecentSuccessBySegment(c, ipSegment, 10),
+				registerLogService.countRecentSuccessBySubnet(c, ipSubnet, 60)
+			]);
+			if (ipRecent >= 2 || segRecent >= 3) {
+				throw new BizError(t('regRandomNameBurst'), 429);
+			}
 		}
 
 		if (password.length > 30) {

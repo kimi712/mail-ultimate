@@ -43,21 +43,7 @@ import emailService from './email-service';
 import userService from './user-service';
 import reqUtils from '../utils/req-utils';
 import { desc, eq } from 'drizzle-orm';
-import { UAParser } from 'ua-parser-js';
-
-function parseDevice(ua) {
-	try {
-		const parser = new UAParser(String(ua || ''));
-		const { browser, device, os } = parser.getResult();
-		const browserText = browser.name ? `${browser.name} ${browser.version || ''}`.trim() : '';
-		const osText = os.name ? `${os.name} ${os.version || ''}`.trim() : '';
-		const deviceText = [device.vendor, device.model].filter(Boolean).join(' ')
-			|| (device.type ? device.type : '') || 'Desktop';
-		return { device: deviceText, browser: [browserText, osText].filter(Boolean).join(' / ') };
-	} catch (e) {
-		return { device: '', browser: '' };
-	}
-}
+import { parseStoredUaText } from '../utils/device-text.js';
 
 function hourOfDbTime(dbTime) {
 	// 'YYYY-MM-DD HH:mm:ss' UTC，字典序即时间序；取小时段（UTC）。
@@ -120,7 +106,7 @@ const loginAnomalyService = {
 
 	scoreLoginAttempt,
 	buildAnomalyEmail,
-	parseDevice,
+	parseDevice: parseStoredUaText,
 
 	// 本次登录评估：读本人近 50 条 login_log + known_ip。
 	// 返回 { isNewIp, isNewDevice, hourUtc, usualHours, score, level,
@@ -133,9 +119,9 @@ const loginAnomalyService = {
 			.where(eq(knownIp.userId, Number(userId))).all();
 		const knownSet = new Set(knownRows.map(r => r.ip));
 		const isNewIp = !!ip && !knownSet.has(ip);
-		const parsed = parseDevice(ua);
+		const parsed = parseStoredUaText(ua);
 		const seenDevices = new Set(rows.slice(0, 20).map(r => {
-			const p = parseDevice(r.ua);
+			const p = parseStoredUaText(r.ua);
 			return `${p.device}|${p.browser}`;
 		}));
 		const isNewDevice = rows.length > 0 && !seenDevices.has(`${parsed.device}|${parsed.browser}`);
@@ -192,8 +178,8 @@ const loginAnomalyService = {
 		const emailAlert = buildAnomalyEmail({
 			email,
 			maskedIp: reqUtils.maskIp(ip),
-			device: evaluation.device || parseDevice(ua).device,
-			browser: evaluation.browser || parseDevice(ua).browser,
+			device: evaluation.device || parseStoredUaText(ua).device,
+			browser: evaluation.browser || parseStoredUaText(ua).browser,
 			time,
 			level: evaluation.level || 'watch',
 		});

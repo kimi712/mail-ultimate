@@ -284,7 +284,7 @@
 <script setup>
 import router from "@/router";
 import {useRoute} from "vue-router";
-import {computed, nextTick, onMounted, onUnmounted, reactive, ref} from "vue";
+import {computed, nextTick, onMounted, onUnmounted, reactive, ref, watch} from "vue";
 import http from "@/axios/index.js";
 import {websiteConfig} from "@/request/setting.js";
 import {isEmail} from "@/utils/verify-utils.js";
@@ -361,6 +361,15 @@ const authErrorMap = {
   // regIpLimit：该 IP 注册已达上限
   '该网络今日注册已达上限，请明天再试': 'authErrRegIpLimit',
   'Too many sign-ups from this network today, please try again tomorrow': 'authErrRegIpLimit',
+  // botUaBlocked：浏览器标识异常（机器人 UA 硬拒）
+  '浏览器标识异常，请用最新版 Chrome 或 Safari 重新打开本站再试': 'authErrBotUa',
+  'Browser identification is abnormal, please reopen this site in the latest Chrome or Safari and try again': 'authErrBotUa',
+  // regSegmentLimit：网段限额
+  '这个网段今天注册的人太多了，请明天再试': 'authErrRegSegmentLimit',
+  'Too many sign-ups from this network segment today, please try again tomorrow': 'authErrRegSegmentLimit',
+  // regRandomNameBurst：随机名 + 集中注册
+  '注册过于频繁，请稍后再试': 'authErrRegRandomName',
+  'Sign-up blocked: too many similar sign-up attempts, please try again later': 'authErrRegRandomName',
   // regTooFrequent：操作太频繁
   '注册请求过于频繁，请稍后再试': 'authErrRegTooFrequent',
   'Too many sign-up attempts, please try again later': 'authErrRegTooFrequent',
@@ -497,6 +506,50 @@ let verifyErrorCount = 0
 let turnstileRecoveryAttempted = false
 const turnstileContainer = ref(null)
 const turnstileContainerKey = ref(0)
+
+// 批量薅号防线：注册页切过来就预渲染 Turnstile，不用等第一次提交才出现。
+// 老站注册页的问题就是后台开着、前端没渲染出验证框——懒加载只在提交时才渲染，
+// 脚本没加载完或 siteKey 为空时用户看到的是空白框、提交永远失败。
+// 这里切到注册页就渲染：验证开启（registerVerify 0/2）且 siteKey 已配才渲染；
+// siteKey 为空时直接亮告警（后端本来就会拒），不静默留白。
+// 已渲染过就 remove 后重渲进当前容器（绑定流程共用同一个 turnstileId，别复用错容器）。
+async function ensureRegisterTurnstile() {
+  if (!(settingStore.settings.registerVerify === 0 || settingStore.settings.registerVerify === 2)) return
+  if (!settingStore.settings.siteKey) {
+    botJsError.value = true
+    turnstileFailed.value = true
+    return
+  }
+  verifyShow.value = true
+  try {
+    await nextTick()
+    if (!turnstileContainer.value) return
+    if (turnstileId) {
+      try { window.turnstile.remove(turnstileId) } catch (e) { /* 旧 widget 已不在 */ }
+      turnstileId = null
+      verifyToken = ''
+    }
+    if (!window.turnstile?.render) {
+      const api = await reloadTurnstileScript()
+      await nextTick()
+      if (!turnstileContainer.value) return
+      turnstileId = api.render(turnstileContainer.value)
+      return
+    }
+    turnstileId = window.turnstile.render(turnstileContainer.value)
+  } catch (e) {
+    botJsError.value = true
+    turnstileFailed.value = true
+    console.log('人机验证js加载失败')
+    recoverTurnstile()
+  }
+}
+
+watch(show, (val) => {
+  if (val === 'register') {
+    ensureRegisterTurnstile()
+  }
+})
 
 async function recoverTurnstile() {
   if (turnstileRecoveryAttempted) return
@@ -1051,21 +1104,7 @@ function submitRegister() {
   if (!verifyToken && (settingStore.settings.registerVerify === 0 || settingStore.settings.registerVerify === 2)) {
     if (turnstileRecoveryAttempted) return
     if (!verifyShow.value) {
-      verifyShow.value = true
-      nextTick(() => {
-        if (!turnstileId) {
-          try {
-            turnstileId = window.turnstile.render('.register-turnstile')
-          } catch (e) {
-            botJsError.value = true
-            turnstileFailed.value = true
-            console.log('人机验证js加载失败')
-            recoverTurnstile()
-          }
-        } else {
-          window.turnstile.reset('.register-turnstile')
-        }
-      })
+      ensureRegisterTurnstile()
     } else if (botJsError.value) {
       recoverTurnstile()
     } else {
@@ -1134,15 +1173,7 @@ function submitRegister() {
     if (res.code === 400) {
       verifyToken = ''
       settingStore.settings.regVerifyOpen = true
-      if (turnstileId) {
-        window.turnstile.reset(turnstileId)
-      } else {
-        nextTick(() => {
-          turnstileId = window.turnstile.render('.register-turnstile')
-        })
-      }
-      verifyShow.value = true
-
+      ensureRegisterTurnstile()
     }
   });
 }

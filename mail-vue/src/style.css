@@ -352,6 +352,12 @@ html[data-wallpaper="1"] {
     --el-fill-color-blank: rgba(13, 18, 28, 0.5);
     --el-fill-color-dark: rgba(255, 255, 255, 0.12);
     --el-mask-color: rgba(0, 0, 0, 0.5);
+    /* ② 壁纸模式漏了这一项：--email-hover-background 仍是 :root 的浅色值
+       #F2F6FC，悬停时整行刷成近白底、字却是壁纸模式的近白字 #f0f2f5，
+       白字白底看不清（2026-11-11 实测：悬停背景 #F2F6FC、字色对比度 ~1:1）。
+       .dark 里有 #1D1E1F 的覆盖，但壁纸模式不一定带 .dark 类。 */
+    --email-hover-background: rgba(255, 255, 255, 0.08);
+    --email-right-click-background: rgba(255, 255, 255, 0.12);
 }
 
 /* 全幅壁纸：外层容器完全透明、不再叠两层深色（两层 0.55 叠加会把壁纸压成黑洞），

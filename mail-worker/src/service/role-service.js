@@ -129,6 +129,23 @@ const roleService = {
 		return await orm(c).select().from(role).where(eq(role.isDefault, roleConst.isDefault.OPEN)).get();
 	},
 
+	// 每邮箱每日发信上限（v3_19DB）：仅 sendType='day' 的角色走这里，取
+	// min(角色额度, 设置 daySendLimit，默认 5)；设置为 0/空时不额外限制（只用角色额度）。
+	// 'count'（总量）角色不走每日口径，仍按原总量逻辑；'ban'/'internal' 由发信流程另行拦截。
+	// user.send_count 是 TEXT 列，读出来可能是字符串，这里统一 Number() 规整，避免
+	// '4' + 1 = '41' 这类字符串拼接把限额判错。
+	effectiveDayLimit(roleRow, daySendLimit) {
+		const quota = Number(roleRow?.sendCount) || 0;
+		if (!quota || roleRow?.sendType !== roleConst.sendType.DAY) {
+			return quota;
+		}
+		const cap = Number(daySendLimit);
+		if (!cap || cap <= 0) {
+			return quota;
+		}
+		return Math.min(quota, cap);
+	},
+
 	async setDefault(c, params) {
 		const roleRow = await orm(c).select().from(role).where(eq(role.roleId, params.roleId)).get();
 		if (!roleRow) {

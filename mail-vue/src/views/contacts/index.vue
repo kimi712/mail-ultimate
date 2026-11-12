@@ -74,7 +74,8 @@ async function load() {
   loading.value = true
   try {
     const res = await listContacts({ q: q.value, num: num.value, size: size.value })
-    const data = res.data?.data || res.data || {}
+    // 拦截器已解包成 { list, total }，不再取 .data（同隐私页 ⑦）
+    const data = res || {}
     list.value = data.list || []
     total.value = data.total || 0
   } finally {

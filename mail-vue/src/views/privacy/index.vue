@@ -14,7 +14,7 @@
         <!-- 数据清单：收集了什么、没收集什么、每项保留多久、能不能关 -->
         <div class="section">
           <div class="section-title">{{ $t('privacyDataInventory') }}</div>
-          <el-table :data="dashboard?.dataInventory || []" style="width: 100%">
+          <el-table v-if="dashboard || !loading" v-loading="loading" :data="dashboard?.dataInventory || []" style="width: 100%">
             <el-table-column :label="$t('privacyItem')" width="220">
               <template #default="{ row }">{{ $t('privacyItem' + capitalize(row.id)) }}</template>
             </el-table-column>
@@ -59,10 +59,12 @@
         />
         <div v-if="pendingAlerts.length" class="section">
           <div class="section-title">{{ $t('newIpAlertPending') }}</div>
-          <el-table :data="pendingAlerts" style="width: 100%" :empty-text="$t('newIpAlertEmpty')">
+          <el-table v-if="pendingAlerts.length || !loading" v-loading="loading" :data="pendingAlerts" style="width: 100%" :empty-text="$t('newIpAlertEmpty')">
             <el-table-column prop="time" :label="$t('loginLogTime')" width="180" />
             <el-table-column prop="ip" :label="$t('loginLogIp')" width="160" />
-            <el-table-column prop="device" :label="$t('loginLogDevice')" />
+            <el-table-column :label="$t('loginLogDevice')">
+              <template #default="{ row }">{{ formatDeviceBrowser(row.device, row.browser) }}</template>
+            </el-table-column>
             <el-table-column :label="$t('securityLoginHistoryLocation')" width="110">
               <template #default>{{ $t('securityLoginHistoryNoLocation') }}</template>
             </el-table-column>
@@ -105,7 +107,7 @@
         <!-- 第三方清单 -->
         <div class="section">
           <div class="section-title">{{ $t('privacyThirdParties') }}</div>
-          <el-table :data="dashboard?.thirdParties || []" style="width: 100%">
+          <el-table v-if="dashboard || !loading" v-loading="loading" :data="dashboard?.thirdParties || []" style="width: 100%">
             <el-table-column :label="$t('privacyThirdParty')" width="220">
               <template #default="{ row }">{{ $t('privacyThird' + capitalize(row.id)) }}</template>
             </el-table-column>
@@ -173,6 +175,7 @@ import { ElMessage } from 'element-plus'
 import { getPrivacyDashboard, listNewIpAlerts, acknowledgeNewIp } from '@/request/privacy.js'
 import { generateRecoveryCodes, setBackupEmail } from '@/request/recovery.js'
 import { setSecurity } from '@/request/security.js'
+import { formatDeviceBrowser } from '@/utils/device.js'
 
 defineOptions({
   name: 'privacy'
@@ -193,6 +196,9 @@ function retentionLabel(text) {
 }
 
 const dashboard = ref(null)
+// ⑦补：加载中先盖 loading 遮罩，别先闪「暂无数据」——数据是异步来的，
+// 空数组 + 无遮罩时首帧就是空表（2026-11-11 老站复验）。
+const loading = ref(true)
 const pendingAlerts = ref([])
 const ackLoading = ref('')
 const saving = ref(false)
@@ -212,11 +218,23 @@ function capitalize(s) {
 }
 
 async function loadAll() {
-  const [dashRes, alertRes] = await Promise.all([getPrivacyDashboard(), listNewIpAlerts()])
-  dashboard.value = dashRes.data?.data || dashRes.data || null
-  pendingAlerts.value = alertRes.data?.data?.list || alertRes.data?.list || []
-  if (dashboard.value?.controls) {
-    Object.assign(controls, dashboard.value.controls)
+  loading.value = true
+  try {
+    // 注意：axios 拦截器对成功请求已经 resolve(data.data)——这里拿到的是
+    // 直接解包后的 payload，不要再取 .data（2026-11-11 ⑦：旧写法
+    // dashRes.data?.data || dashRes.data 恒为 null，两表全空、开关区也不显示）。
+    // 两路请求各自兜底：一路失败不拖垮另一路。
+    const [dashRes, alertRes] = await Promise.all([
+      getPrivacyDashboard().catch(() => null),
+      listNewIpAlerts().catch(() => null)
+    ])
+    dashboard.value = dashRes || null
+    pendingAlerts.value = alertRes?.list || []
+    if (dashboard.value?.controls) {
+      Object.assign(controls, dashboard.value.controls)
+    }
+  } finally {
+    loading.value = false
   }
 }
 
@@ -244,7 +262,8 @@ async function onGenerateCodes() {
   recoveryLoading.value = true
   try {
     const res = await generateRecoveryCodes(recoveryPassword.value)
-    generatedCodes.value = res.data?.data?.codes || res.data?.codes || []
+    // 拦截器已解包成 { codes: [...] }，不再取 .data（同上 ⑦）
+    generatedCodes.value = res?.codes || []
   } finally {
     recoveryLoading.value = false
   }

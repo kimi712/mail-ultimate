@@ -734,8 +734,10 @@ async function inputChange(value) {
   if (value) {
     try {
       const contacts = await suggestContacts(value)
+      // 拦截器已解包成 { list }；直接 for...of 对象会抛错被 catch 吞掉，
+      // 联想一直不出（同隐私页 ⑦）
       const merged = [...selectRecipientList.value]
-      for (const c of contacts || []) {
+      for (const c of contacts?.list || []) {
         const email = typeof c === 'string' ? c : c.email
         if (email && !form.receiveEmail.includes(email) && !merged.includes(email)) merged.push(email)
       }

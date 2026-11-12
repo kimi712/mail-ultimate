@@ -46,6 +46,8 @@ const dbInit = {
 		await this.v3_15DB(c);
 		await this.v3_16DB(c);
 		await this.v3_17DB(c);
+		await this.v3_18DB(c);
+		await this.v3_19DB(c);
 		await settingService.refresh(c);
 		return c.text('success');
 	},
@@ -1419,6 +1421,40 @@ const dbInit = {
 				created_at DATETIME DEFAULT CURRENT_TIMESTAMP
 			);`,
 			`CREATE INDEX IF NOT EXISTS idx_challenge_attempt_time ON challenge_attempt(created_at);`
+		];
+		for (const sql of SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		}
+	},
+
+	async v3_19DB(c) {
+		// 每邮箱每日发信上限（v3_19DB）：setting 新列 day_send_limit（默认 5）。
+		// 逐条独立 try/catch + console.warn，幂等、可重跑。
+		const SQL_LIST = [
+			`ALTER TABLE setting ADD COLUMN day_send_limit INTEGER NOT NULL DEFAULT 5;`,
+		];
+		for (const sql of SQL_LIST) {
+			try {
+				await c.env.db.prepare(sql).run();
+			} catch (e) {
+				console.warn(`跳过字段：${e.message}`);
+			}
+		}
+	},
+
+	async v3_18DB(c) {
+		// 批量薅号三层防线：setting 新列 reg_segment_limit（段级限流阈值，默认 9）+
+		// register_log 新列 ip_subnet（网段键）+ 段限流计数索引 + 用户创建时间索引。
+		// 逐条独立 try/catch + console.warn，幂等、可重跑。
+		const SQL_LIST = [
+			`ALTER TABLE setting ADD COLUMN reg_segment_limit INTEGER NOT NULL DEFAULT 9;`,
+			`ALTER TABLE register_log ADD COLUMN ip_subnet TEXT NOT NULL DEFAULT '';`,
+			`CREATE INDEX IF NOT EXISTS idx_register_log_subnet_time ON register_log(ip_subnet, create_time);`,
+			`CREATE INDEX IF NOT EXISTS idx_user_create_time ON user(create_time);`
 		];
 		for (const sql of SQL_LIST) {
 			try {

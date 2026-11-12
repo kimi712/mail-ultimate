@@ -153,7 +153,8 @@ async function load() {
   loading.value = true
   try {
     const res = await listRules()
-    rules.value = res.data?.data?.list || res.data?.list || []
+    // 拦截器已解包成 { list }，不再取 .data（同隐私页 ⑦）
+    rules.value = res?.list || []
   } finally {
     loading.value = false
   }
