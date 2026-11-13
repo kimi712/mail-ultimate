@@ -36,6 +36,18 @@ Student Mail is a free `.edu` mailbox, valid until **2083**. No student ID, no t
 
 <img src="doc/demo/ui-compose.png" width="600">
 
+**Bounty challenge page — $1,000 security bounty, end-to-end encryption proof**
+
+<img src="doc/demo/ui-challenge.png" width="800">
+
+## Built-in wallpapers (sample)
+
+| City of Surveillance | Moscow Rainy Night | 39 Days at the Airport |
+|---|---|---|
+| <img src="doc/demo/ui-wallpaper-vista.jpg" width="300"> | <img src="doc/demo/ui-wallpaper-moscow.jpg" width="300"> | <img src="doc/demo/ui-wallpaper-airport.jpg" width="300"> |
+
+57 built-in wallpapers in total: Snowden cinematic vistas, Victoria's Secret runway photos, and more.
+
 ## ✨ What makes it different
 
 - **🔒 End-to-end encryption (optional)**: mail is encrypted in the browser before upload; the server only stores ciphertext. With E2EE on, not even the admin can read in-site mail.

@@ -36,6 +36,18 @@
 
 <img src="doc/demo/ui-compose.png" width="600">
 
+**悬赏挑战页 —— $1,000 安全赏金，端到端加密验证**
+
+<img src="doc/demo/ui-challenge.png" width="800">
+
+## 内置壁纸（部分）
+
+| 监控之城 | 莫斯科雨夜 | 机场 39 天 |
+|---|---|---|
+| <img src="doc/demo/ui-wallpaper-vista.jpg" width="300"> | <img src="doc/demo/ui-wallpaper-moscow.jpg" width="300"> | <img src="doc/demo/ui-wallpaper-airport.jpg" width="300"> |
+
+共 57 张内置壁纸：斯诺登主题电影感远景、维密大秀实拍等。
+
 ## ✨ 我们的特色
 
 - **🔒 端到端加密（可选）**：邮件在浏览器端加密后再上传，服务器只存密文；开启 E2EE 的站内邮件，连管理员也读不了
